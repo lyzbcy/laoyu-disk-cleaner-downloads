@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "candidate": true,
+  "published": false,
+  "repository": "lyzbcy/laoyu-disk-cleaner-downloads",
+  "release": 412494806,
+  "version": "2.0.0",
+  "source": "1d904f540c5d2dd2a131fb2cbafea65a164df292",
+  "run": 38519320595,
+  "assets": [
+    {
+      "name": "laoyu-disk-cleaner-2.0.0-mac-arm64.zip",
+      "id": 639766749,
+      "size": 133809290,
+      "sha256": "13277ecdb91969b3e1c95c3f01aeccceac78d95597b0caa03d190cf449522d2f"
+    },
+    {
+      "name": "laoyu-disk-cleaner-2.0.0-mac-arm64.dmg",
+      "id": 639766747,
+      "size": 147971723,
+      "sha256": "b772b75f514c0482b0be978e551e688e26e3b2a91ea9745e23e825a491717080"
+    },
+    {
+      "name": "laoyu-disk-cleaner-2.0.0-mac-x64.zip",
+      "id": 639766751,
+      "size": 139446801,
+      "sha256": "b09669f54c0602ca1f2d52981e0f8cca0afd46f41c755e72145f20fc4b66e240"
+    },
+    {
+      "name": "laoyu-disk-cleaner-2.0.0-mac-x64.dmg",
+      "id": 639769499,
+      "size": 154512930,
+      "sha256": "f865585351e785ccbb0bb618cc1d6533944628848c42d0b68d3ed2752ceac9ff"
+    },
+    {
+      "name": "laoyu-disk-cleaner-2.0.0-win-x64.zip",
+      "id": 639769790,
+      "size": 157456167,
+      "sha256": "f7cc129546f6a0360c83bd1942739c1bcc6ab113213b5dd60707bc42391a106e"
+    },
+    {
+      "name": "laoyu-disk-cleaner-2.0.0-win-x64-setup.exe",
+      "id": 639770347,
+      "size": 115231089,
+      "sha256": "cd9715ce2c0eef3a4bf2b187922d5abc8277dc49fffd3f5d7e637bb077b867c6"
+    }
+  ]
+}
