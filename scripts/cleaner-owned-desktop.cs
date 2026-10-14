@@ -82,7 +82,7 @@ public sealed class CleanerOwnedDesktop {
 // CI-only grant for a new logon SID placed into the runner's existing Terminal Session.
 // Does not change owner, Global namespace, another session, groups, or product files.
 public sealed class CleanerOwnedNamespace {
- const uint ChildMask=7;
+ const uint ChildMask=0xF;
  readonly string sid;IntPtr directory;byte[] before,ownAce;bool writeAttempted;
  public readonly Dictionary<string,object> Evidence=new Dictionary<string,object>();
  [StructLayout(LayoutKind.Sequential)] struct Unicode {public ushort Length,MaximumLength;public IntPtr Buffer;}
@@ -94,7 +94,7 @@ public sealed class CleanerOwnedNamespace {
  static void NtCheck(int status){if(status<0)throw new InvalidOperationException("NAMESPACE_NTSTATUS_0x"+unchecked((uint)status).ToString("X8"));}
  static byte[] Read(IntPtr handle){var bytes=new byte[65536];uint needed;NtCheck(NtQuerySecurityObject(handle,7,bytes,(uint)bytes.Length,out needed));if(needed<20||needed>bytes.Length)throw new InvalidOperationException("NAMESPACE_SD_BOUND");Array.Resize(ref bytes,(int)needed);return bytes;}
  static void WriteDacl(IntPtr handle,byte[] descriptor){NtCheck(NtSetSecurityObject(handle,4,descriptor));}
- public CleanerOwnedNamespace(string logonSid){CleanerOwnedDesktop.RequireLogonSid(new[]{logonSid},new uint[]{0xc0000007});sid=logonSid;Evidence["logonSid"]=sid;Evidence["childMask"]=ChildMask;Evidence["authority"]="Disposable GHA current Terminal Session; exact new enabled logon SID noninherited DIRECTORY_QUERY|DIRECTORY_TRAVERSE|DIRECTORY_CREATE_OBJECT only";}
+ public CleanerOwnedNamespace(string logonSid){CleanerOwnedDesktop.RequireLogonSid(new[]{logonSid},new uint[]{0xc0000007});sid=logonSid;Evidence["logonSid"]=sid;Evidence["childMask"]=ChildMask;Evidence["authority"]="Disposable GHA current Terminal Session; exact new enabled logon SID noninherited DIRECTORY_QUERY|DIRECTORY_TRAVERSE|DIRECTORY_CREATE_OBJECT|DIRECTORY_CREATE_SUBDIRECTORY only; actual same-OS BaseGetNamedObjectDirectory request traced in run38565203024 and ordinary open refusal under mask7 in run38565724484";}
  public void Prepare(){
   if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true"||Environment.GetEnvironmentVariable("CI")!="true")throw new InvalidOperationException("DISPOSABLE_GHA_ONLY");
   int session=System.Diagnostics.Process.GetCurrentProcess().SessionId;if(session==0)throw new InvalidOperationException("INTERACTIVE_SESSION_REQUIRED");string name="\\Sessions\\"+session+"\\BaseNamedObjects";Evidence["name"]=name;
