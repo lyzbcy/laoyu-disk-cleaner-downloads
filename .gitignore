@@ -2,3 +2,5 @@ src/
 candidate/
 downloads/
 verification/
+build-input/
+__pycache__/
