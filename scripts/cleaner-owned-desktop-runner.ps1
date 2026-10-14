@@ -82,7 +82,7 @@ public static class CleanerOwnedDesktopRunner {
   [DllImport("userenv.dll")] static extern bool DestroyEnvironmentBlock(IntPtr environment);
   [DllImport("userenv.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetUserProfileDirectory(SafeAccessTokenHandle token,StringBuilder path,ref uint size);
   [DllImport("userenv.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool DeleteProfile(string sid,string path,string computer);
-  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcessWithLogonW(string user,string domain,string password,uint logon,string app,string command,uint flags,IntPtr environment,string directory,ref Startup startup,out ProcessInfo process);
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcessWithTokenW(SafeAccessTokenHandle token,uint logon,string app,StringBuilder command,uint flags,IntPtr environment,string directory,ref Startup startup,out ProcessInfo process);
   [DllImport("advapi32.dll", SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out SafeAccessTokenHandle token);
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool LookupPrivilegeValue(string system,string name,out Luid id);
   [DllImport("advapi32.dll", SetLastError=true)] static extern bool AdjustTokenPrivileges(SafeAccessTokenHandle token,bool disable,ref Privileges state,uint size,IntPtr old,IntPtr returned);
@@ -99,6 +99,8 @@ public static class CleanerOwnedDesktopRunner {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process,uint code);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   static void Check(bool ok) { if(!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(SafeAccessTokenHandle token,int type,IntPtr info,uint size,out uint needed);
+  static Dictionary<string,object> ExistingImpersonate(){SafeAccessTokenHandle current;Check(OpenProcessToken(GetCurrentProcess(),8,out current));using(current){Luid id;Check(LookupPrivilegeValue(null,"SeImpersonatePrivilege",out id));IntPtr bytes=Marshal.AllocHGlobal(65536);try{uint needed;Check(GetTokenInformation(current,3,bytes,65536,out needed));int count=Marshal.ReadInt32(bytes);if(count<0||count>4096||4+count*12>needed)throw new InvalidOperationException("TOKEN_PRIVILEGES_BOUND");for(int i=0;i<count;i++){int p=4+i*12;if((uint)Marshal.ReadInt32(bytes,p)==id.Low&&Marshal.ReadInt32(bytes,p+4)==id.High){uint attributes=(uint)Marshal.ReadInt32(bytes,p+8);return new Dictionary<string,object>{{"present",true},{"enabled",(attributes&2)!=0},{"attributes",attributes},{"modified",false}};}}return new Dictionary<string,object>{{"present",false},{"enabled",false},{"modified",false}};}finally{Marshal.FreeHGlobal(bytes);}}}
   static void Enable(string name) {
     SafeAccessTokenHandle token; Check(OpenProcessToken(GetCurrentProcess(),0x28,out token));
     using(token) { var state=new Privileges { Count=1,Attributes=2 }; Check(LookupPrivilegeValue(null,name,out state.Id)); Check(AdjustTokenPrivileges(token,false,ref state,0,IntPtr.Zero,IntPtr.Zero)); int error=Marshal.GetLastWin32Error(); if(error!=0) throw new Win32Exception(error); }
@@ -152,8 +154,9 @@ public static class CleanerOwnedDesktopRunner {
         stage="owned-child-job"; job=CreateJobObject(IntPtr.Zero,null); Check(job!=IntPtr.Zero); var limits=new JobExtended(); limits.Basic.Flags=0x2000; Check(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(JobExtended))));
         var startup=new Startup { Size=(uint)Marshal.SizeOf(typeof(Startup)),Desktop=ownedDesktop.RequestedDesktop,Flags=0x100,Input=input.DangerousGetHandle(),Output=outFile.DangerousGetHandle(),Error=outFile.DangerousGetHandle() };
         string suite=Path.Combine(project,"scripts","cleaner-owned-desktop-probe.cjs"); string command="\""+node+"\" \""+suite+"\"";
-        stage="create-process-with-native-profile"; Check(CreateProcessWithLogonW(user,".",password,1,node,command,0x404,testEnv,project,ref startup,out process)); Check(AssignProcessToJobObject(job,process.Process));
+        stage="create-process-with-existing-primary-token"; Diagnostic["launchApi"]="CreateProcessWithTokenW; existing primary token; logonFlags=0; explicit owned desktop";Diagnostic["existingSeImpersonatePrivilege"]=ExistingImpersonate();Check(CreateProcessWithTokenW(token,0,node,new StringBuilder(command),0x404,testEnv,project,ref startup,out process)); Check(AssignProcessToJobObject(job,process.Process));
         SafeAccessTokenHandle actualChild;Check(OpenProcessToken(process.Process,0xA,out actualChild));using(actualChild){Diagnostic["actualChildAccess"]=DesktopEvidence(actualChild);Diagnostic["actualChildProfile"]=ProfilePath(actualChild);}
+        ownedDesktop.VerifyStillPrepared();
         if(ResumeThread(process.Thread)==UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error());
         Console.WriteLine("STANDARD_USER_STARTED user="+user+" sid="+sidValue+" nativeProfile="+actualProfile+" accountGroup=Users");
         stage="owned-child-result"; uint wait=WaitForSingleObject(process.Process,360000); if(wait!=0) throw new InvalidOperationException("OWNED_TEST_PROCESS_TIMEOUT_OR_WAIT_FAILURE"); processExited=true; uint code; Check(GetExitCodeProcess(process.Process,out code)); Diagnostic["childExitCode"]=code;exit=code==0?0:1;

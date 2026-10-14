@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 // Test infrastructure only. Never loaded by the production application.
 public sealed class CleanerOwnedDesktop {
  const uint StationMask=0x20327, DesktopMask=0x201CF;
- readonly string sid,nonce; IntPtr station,input,desktop; byte[] stationBefore,defaultBefore,stationExpected,ownAce; bool stationWriteAttempted;
+ readonly string sid,nonce; IntPtr station,input,desktop; byte[] stationBefore,defaultBefore,stationExpected,desktopExpected,ownAce; bool stationWriteAttempted;
  public readonly Dictionary<string,object> Evidence=new Dictionary<string,object>();
  public string RequestedDesktop { get {return "winsta0\\"+DesktopName(nonce);} }
  public static bool ValidSid(string value) { if(!Regex.IsMatch(value??"",@"^S-1-5-21-\d+-\d+-\d+-\d+$"))return false;uint rid;return UInt32.TryParse(value.Substring(value.LastIndexOf('-')+1),out rid)&&rid>=1000; }
@@ -61,10 +61,11 @@ public sealed class CleanerOwnedDesktop {
   station=OpenWindowStationW("WinSta0",false,0x60000|StationMask);Check(station!=IntPtr.Zero);stationBefore=Read(station);Evidence["stationBefore"]=Convert.ToBase64String(stationBefore);
   string name=DesktopName(nonce);IntPtr collision=OpenDesktopW(name,0,false,1);if(collision!=IntPtr.Zero){CloseDesktop(collision);throw new InvalidOperationException("DESKTOP_NAME_COLLISION");}int error=Marshal.GetLastWin32Error();if(error!=2)throw new Win32Exception(error);
   var id=new SecurityIdentifier(sid);var binary=new byte[id.BinaryLength];id.GetBinaryForm(binary,0);ownAce=Ace(binary,StationMask);stationExpected=Append(stationBefore,ownAce);stationWriteAttempted=true;WriteDacl(station,stationExpected);var actual=Read(station);if(!SameExceptAppended(stationBefore,actual,ownAce))throw new InvalidOperationException("STATION_ACE_READBACK_MISMATCH");Evidence["stationPrepared"]=Convert.ToBase64String(actual);
-  byte[] d=Append(defaultBefore,Ace(binary,DesktopMask));IntPtr memory=Marshal.AllocHGlobal(d.Length);try{Marshal.Copy(d,0,memory,d.Length);var security=new Security{Size=Marshal.SizeOf(typeof(Security)),Descriptor=memory,Inherit=false};ClearLastError(0);desktop=CreateDesktopW(name,IntPtr.Zero,IntPtr.Zero,0,0x60183,ref security);error=Marshal.GetLastWin32Error();Check(desktop!=IntPtr.Zero);if(error==183)throw new InvalidOperationException("DESKTOP_NAME_COLLISION");}finally{Marshal.FreeHGlobal(memory);}
+  byte[] d=Append(defaultBefore,Ace(binary,DesktopMask));desktopExpected=d;IntPtr memory=Marshal.AllocHGlobal(d.Length);try{Marshal.Copy(d,0,memory,d.Length);var security=new Security{Size=Marshal.SizeOf(typeof(Security)),Descriptor=memory,Inherit=false};ClearLastError(0);desktop=CreateDesktopW(name,IntPtr.Zero,IntPtr.Zero,0,0x60183,ref security);error=Marshal.GetLastWin32Error();Check(desktop!=IntPtr.Zero);if(error==183)throw new InvalidOperationException("DESKTOP_NAME_COLLISION");}finally{Marshal.FreeHGlobal(memory);}
   if(!SameDescriptor(d,Read(desktop)))throw new InvalidOperationException("NEW_DESKTOP_DACL_READBACK_MISMATCH");Evidence["desktopName"]=name;Evidence["desktopDescriptor"]=Convert.ToBase64String(Read(desktop));
   if(!Equal(defaultBefore,Read(input)))throw new InvalidOperationException("DEFAULT_DESKTOP_CHANGED");Check(SwitchDesktop(desktop));if(InputName()!=name)throw new InvalidOperationException("INPUT_DESKTOP_SWITCH_UNCONFIRMED");Evidence["inputDesktopPrepared"]=name;
  }
+ public void VerifyStillPrepared(){if(!SameExceptAppended(stationBefore,Read(station),ownAce)||!Equal(defaultBefore,Read(input))||!SameDescriptor(desktopExpected,Read(desktop)))throw new InvalidOperationException("LAUNCH_API_CHANGED_DESKTOP_SECURITY");Evidence["securityUnchangedAfterCreate"]=true;}
  public List<string> Restore(bool ownedStopped){
   var errors=new List<string>();if(!ownedStopped)errors.Add("owned-actors-still-running");
   // Each cleanup action is independent: a failed switch must not skip ACE restoration.
