@@ -18,6 +18,21 @@ using Microsoft.Win32.SafeHandles;
 public static class CleanerOwnedDesktopRunner {
 
   public static Dictionary<string,object> Diagnostic = new Dictionary<string,object>{{"scope","new ordinary OS account/profile and CI-owned interactive desktop; unique token logon-session station ACE temporarily added, exact restoration required; Default/profile ACLs never changed"}};
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr OpenMutex(uint access,bool inherit,string name);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(IntPtr handle,int type,uint info,out IntPtr owner,out IntPtr group,out IntPtr dacl,out IntPtr sacl,out IntPtr descriptor);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
+  [DllImport("ntdll.dll")] static extern int NtOpenDirectoryObject(out IntPtr handle,uint access,ref ObjectAttributes attributes);
+  static object ParentNamespaceSecurity() {
+    string name="\\Sessions\\"+System.Diagnostics.Process.GetCurrentProcess().SessionId+"\\BaseNamedObjects";var row=new Dictionary<string,object>{{"name",name},{"scope","parent original identity; READ_CONTROL owner and DACL only"}};IntPtr text=Marshal.StringToHGlobalUni(name),unicode=IntPtr.Zero,handle=IntPtr.Zero;
+    try{var value=new UnicodeString{Length=(ushort)(name.Length*2),MaximumLength=(ushort)((name.Length+1)*2),Buffer=text};unicode=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString)));Marshal.StructureToPtr(value,unicode,false);var attributes=new ObjectAttributes{Length=(uint)Marshal.SizeOf(typeof(ObjectAttributes)),ObjectName=unicode,Attributes=0x40};int status=NtOpenDirectoryObject(out handle,0x20000,ref attributes);row["ntstatus"]="0x"+unchecked((uint)status).ToString("X8");row["opened"]=status>=0;if(status>=0){IntPtr owner,group,dacl,sacl,descriptor;uint code=GetSecurityInfo(handle,6,5,out owner,out group,out dacl,out sacl,out descriptor);row["securityError"]=code;if(code==0){try{uint length=GetSecurityDescriptorLength(descriptor);if(length<20||length>65536)throw new InvalidOperationException("NAMESPACE_SECURITY_BOUND");byte[] bytes=new byte[length];Marshal.Copy(descriptor,bytes,0,(int)length);row["descriptorBase64"]=Convert.ToBase64String(bytes);row["sddl"]=new System.Security.AccessControl.RawSecurityDescriptor(bytes,0).GetSddlForm(System.Security.AccessControl.AccessControlSections.Owner|System.Security.AccessControl.AccessControlSections.Access);}finally{LocalFree(descriptor);}}}}catch(Exception e){row["error"]=e.Message.Substring(0,Math.Min(e.Message.Length,2048));}finally{if(handle!=IntPtr.Zero)row["closed"]=CloseHandle(handle);if(unicode!=IntPtr.Zero)Marshal.FreeHGlobal(unicode);Marshal.FreeHGlobal(text);}return row;
+  }
+  static object ProductMutexSecurity(string phase) {
+    const string name="Local\\LaoyuDiskCleanerProcessSingletonStartup";var row=new Dictionary<string,object>{{"scope","parent original identity; fixed product mutex READ_CONTROL only"},{"phase",phase},{"name",name},{"sessionId",System.Diagnostics.Process.GetCurrentProcess().SessionId}};
+    IntPtr handle=OpenMutex(0x20000,false,name);int error=handle==IntPtr.Zero?Marshal.GetLastWin32Error():0;row["opened"]=handle!=IntPtr.Zero;row["win32Error"]=error;
+    try{if(handle!=IntPtr.Zero){IntPtr owner,group,dacl,sacl,descriptor;uint code=GetSecurityInfo(handle,6,5,out owner,out group,out dacl,out sacl,out descriptor);row["securityError"]=code;if(code==0){try{uint length=GetSecurityDescriptorLength(descriptor);if(length<20||length>65536)throw new InvalidOperationException("MUTEX_SECURITY_BOUND");byte[] bytes=new byte[length];Marshal.Copy(descriptor,bytes,0,(int)length);row["sddl"]=new System.Security.AccessControl.RawSecurityDescriptor(bytes,0).GetSddlForm(System.Security.AccessControl.AccessControlSections.Owner|System.Security.AccessControl.AccessControlSections.Access);}finally{LocalFree(descriptor);}}}}catch(Exception e){row["readError"]=e.Message.Substring(0,Math.Min(e.Message.Length,2048));}finally{if(handle!=IntPtr.Zero)row["handleClosed"]=CloseHandle(handle);}
+    return row;
+  }
   [StructLayout(LayoutKind.Sequential)] struct GenericMapping { public uint Read,Write,Execute,All; }
   [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
   [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
@@ -150,6 +165,7 @@ public static class CleanerOwnedDesktopRunner {
     Diagnostic["scope"]=fullSuite?"original candidate GUI and isolated owned file actions plus visible installer/default-data reopen in disposable ordinary-user interactive desktop":"ordinary-user CI-owned interactive desktop startup diagnostic only";
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("ISOLATED_GHA_ONLY");
     if(!Path.IsPathRooted(node)||!Path.IsPathRooted(project)||node.Contains("\"")||project.Contains("\"")||!String.Equals(Path.GetFullPath(project),Path.GetFullPath(Environment.GetEnvironmentVariable("GITHUB_WORKSPACE")),StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("INVALID_RUNNER_PATH");
+    Diagnostic["parentNamespaceSecurity"]=ParentNamespaceSecurity();Diagnostic["parentProductMutexBefore"]=ProductMutexSecurity("before-new-account");
     string user="cln"+Guid.NewGuid().ToString("N").Substring(0,12), password;
     CleanerOwnedDesktop ownedDesktop=null;
     byte[] random=new byte[24]; using(var rng=RandomNumberGenerator.Create()) rng.GetBytes(random); password=Convert.ToBase64String(random)+"aA1!"; Array.Clear(random,0,random.Length);
@@ -198,6 +214,7 @@ public static class CleanerOwnedDesktopRunner {
       if(process.Thread!=IntPtr.Zero) CloseHandle(process.Thread); if(process.Process!=IntPtr.Zero) CloseHandle(process.Process);
       if(testEnv!=IntPtr.Zero) Marshal.FreeHGlobal(testEnv); if(nativeEnv!=IntPtr.Zero) DestroyEnvironmentBlock(nativeEnv);
       bool desktopRestored=true;
+      Diagnostic["parentProductMutexAfter"]=ProductMutexSecurity("after-owned-job-cleanup-before-desktop-restore");
       if(ownedDesktop!=null){var desktopErrors=ownedDesktop.Restore(ownedStopped);Diagnostic["ownedDesktop"]=ownedDesktop.Evidence;cleanup.AddRange(desktopErrors);desktopRestored=desktopErrors.Count==0;}
       if(profileLoaded&&ownedStopped) { if(UnloadUserProfile(token,profile.Handle)) profileLoaded=false; else cleanup.Add("profile-unload="+Marshal.GetLastWin32Error()); }
       if(created&&sidValue!=null&&profileEverLoaded&&!profileLoaded&&ownedStopped&&desktopRestored) {
