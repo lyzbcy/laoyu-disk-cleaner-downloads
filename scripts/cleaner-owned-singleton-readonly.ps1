@@ -38,6 +38,11 @@ public static class CleanerSingletonReadOnly {
   IntPtr buffer=Marshal.StringToHGlobalUni(name),unicode=IntPtr.Zero,handle=IntPtr.Zero;
   try{UNICODE_STRING value=new UNICODE_STRING{Length=(ushort)(name.Length*2),MaximumLength=(ushort)((name.Length+1)*2),Buffer=buffer};unicode=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UNICODE_STRING)));Marshal.StructureToPtr(value,unicode,false);OBJECT_ATTRIBUTES attributes=new OBJECT_ATTRIBUTES{Length=Marshal.SizeOf(typeof(OBJECT_ATTRIBUTES)),ObjectName=unicode,Attributes=0x40};int status=NtOpenDirectoryObject(out handle,0x20000,ref attributes);return new {name=name,access="READ_CONTROL",opened=status>=0,ntstatus="0x"+unchecked((uint)status).ToString("X8"),security=status<0?null:Security(handle)};}finally{if(handle!=IntPtr.Zero)CloseHandle(handle);if(unicode!=IntPtr.Zero)Marshal.FreeHGlobal(unicode);Marshal.FreeHGlobal(buffer);}
  }
+ public static object Win32Directory(int session){
+  string name="\\Sessions\\"+session+"\\BaseNamedObjects";
+  IntPtr buffer=Marshal.StringToHGlobalUni(name),unicode=IntPtr.Zero,handle=IntPtr.Zero;
+  try{UNICODE_STRING value=new UNICODE_STRING{Length=(ushort)(name.Length*2),MaximumLength=(ushort)((name.Length+1)*2),Buffer=buffer};unicode=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UNICODE_STRING)));Marshal.StructureToPtr(value,unicode,false);OBJECT_ATTRIBUTES attributes=new OBJECT_ATTRIBUTES{Length=Marshal.SizeOf(typeof(OBJECT_ATTRIBUTES)),ObjectName=unicode,Attributes=0x40};int status=NtOpenDirectoryObject(out handle,0xf,ref attributes);return new {name=name,access="0xf observed BaseGetNamedObjectDirectory request; open/close only",opened=status>=0,ntstatus="0x"+unchecked((uint)status).ToString("X8"),security=status<0?null:Security(handle)};}finally{if(handle!=IntPtr.Zero)CloseHandle(handle);if(unicode!=IntPtr.Zero)Marshal.FreeHGlobal(unicode);Marshal.FreeHGlobal(buffer);}
+ }
 }
 '@
 $full=[CleanerSingletonReadOnly]::LongPath([IO.Path]::GetFullPath($DataDirectory))
@@ -47,4 +52,4 @@ $session=[Diagnostics.Process]::GetCurrentProcess().SessionId
 $paths=@($full,[IO.Path]::Combine($full,'lockfile'))|ForEach-Object {
  try{if(!(Test-Path -LiteralPath $_)){@{path=$_;exists=$false}}else{$item=Get-Item -Force -LiteralPath $_;$acl=Get-Acl -LiteralPath $_;@{path=$_;exists=$true;attributes=[string]$item.Attributes;owner=$acl.Owner;sddl=$acl.Sddl}}}catch{@{path=$_;error=[string]$_.Exception.Message}}
 }
-@{scope='Fixed security reads plus new owned nonce mutex create-and-close; no wait, ownership or ACL mutation';ownedNonceMutex=[CleanerSingletonReadOnly]::OwnedNonceMutex($env:CLEANER_CI_DESKTOP_NONCE);sessionId=$session;mutex=[CleanerSingletonReadOnly]::Mutex();objectDirectory=[CleanerSingletonReadOnly]::Directory($session);paths=@($paths)}|ConvertTo-Json -Depth 6 -Compress
+@{scope='Fixed security reads plus new owned nonce mutex create-and-close; no wait, ownership or ACL mutation';ownedNonceMutex=[CleanerSingletonReadOnly]::OwnedNonceMutex($env:CLEANER_CI_DESKTOP_NONCE);sessionId=$session;mutex=[CleanerSingletonReadOnly]::Mutex();objectDirectory=[CleanerSingletonReadOnly]::Directory($session);win32NamespaceOpen=[CleanerSingletonReadOnly]::Win32Directory($session);paths=@($paths)}|ConvertTo-Json -Depth 6 -Compress
