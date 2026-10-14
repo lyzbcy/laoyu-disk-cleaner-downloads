@@ -46,6 +46,14 @@ public sealed class CleanerOwnedDesktop {
  static byte[] Read(IntPtr h){uint info=7,n;var b=new byte[65536];Check(GetUserObjectSecurity(h,ref info,b,(uint)b.Length,out n));if(n<20||n>b.Length)throw new InvalidOperationException("SD_BOUND");Array.Resize(ref b,(int)n);return b;}
  static void WriteDacl(IntPtr h,byte[] d){uint info=4;Check(SetUserObjectSecurity(h,ref info,d));}
  string InputName(){IntPtr h=OpenInputDesktop(0,false,1);Check(h!=IntPtr.Zero);try{return Name(h);}finally{Check(CloseDesktop(h));}}
+ [StructLayout(LayoutKind.Sequential)] struct GenericMapping {public uint Read,Write,Execute,All;}
+ [DllImport("advapi32.dll",SetLastError=true)] static extern bool DuplicateTokenEx(IntPtr token,uint access,IntPtr attributes,int level,int type,out IntPtr copy);
+ [DllImport("advapi32.dll",SetLastError=true)] static extern bool AccessCheck(byte[] descriptor,IntPtr token,uint desired,ref GenericMapping mapping,IntPtr privileges,ref uint size,out uint granted,out bool allowed);
+ [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+ public Dictionary<string,object> Access(IntPtr token){
+  var result=new Dictionary<string,object>();IntPtr copy;Check(DuplicateTokenEx(token,8,IntPtr.Zero,2,2,out copy));
+  try{foreach(string kind in new[]{"windowStation","ownedDesktop"}){var mapping=kind=="windowStation"?new GenericMapping{Read=0x20303,Write=0x2001C,Execute=0x20060,All=0xF037F}:new GenericMapping{Read=0x20041,Write=0x200BE,Execute=0x20100,All=0xF01FF};var bytes=Read(kind=="windowStation"?station:desktop);IntPtr buffer=Marshal.AllocHGlobal(65536);try{uint size=65536,granted;bool allowed;Check(AccessCheck(bytes,copy,0x02000000,ref mapping,buffer,ref size,out granted,out allowed));result[kind]=new Dictionary<string,object>{{"allowed",allowed},{"grantedMask",granted},{"descriptorBase64",Convert.ToBase64String(bytes)},{"requested","MAXIMUM_ALLOWED; designated ordinary logon token, actual owned objects"}};}finally{Marshal.FreeHGlobal(buffer);}}}finally{Check(CloseHandle(copy));}return result;
+ }
  public void Prepare(){
   if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true"||Environment.GetEnvironmentVariable("CI")!="true")throw new InvalidOperationException("DISPOSABLE_GHA_ONLY");
   if(Name(GetProcessWindowStation())!="WinSta0"||Name(GetThreadDesktop(GetCurrentThreadId()))!="Default"||System.Diagnostics.Process.GetCurrentProcess().SessionId==0)throw new InvalidOperationException("PARENT_INTERACTIVE_DEFAULT_REQUIRED");

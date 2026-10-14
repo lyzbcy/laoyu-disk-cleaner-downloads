@@ -38,6 +38,24 @@ public static class CleanerOwnedDesktopRunner {
   }
   static bool SameDesktopDescriptors(Dictionary<string,object> before,Dictionary<string,object> after) { foreach(string kind in new[]{"windowStation","desktop"}) { var a=before[kind] as Dictionary<string,object>;var b=after[kind] as Dictionary<string,object>;if(!(bool)a["ok"]||!(bool)b["ok"]||!Equals(a["descriptorBase64"],b["descriptorBase64"]))return false; }return true; }
 
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool ImpersonateLoggedOnUser(SafeAccessTokenHandle token);
+  [DllImport("advapi32.dll",SetLastError=true)] static extern bool RevertToSelf();
+  public static bool ReadOnlyProbeThreadEnded=true;
+  public static void InIsolatedThread(Action inspect,Action revert) {
+    Exception failure=null;ReadOnlyProbeThreadEnded=false;
+    var worker=new System.Threading.Thread(delegate(){try{inspect();}catch(Exception e){failure=e;}finally{try{revert();}catch(Exception e){failure=e;}}});
+    worker.IsBackground=true;worker.Start();if(!worker.Join(30000))throw new InvalidOperationException("READ_ONLY_PROBE_THREAD_TIMEOUT");ReadOnlyProbeThreadEnded=true;if(failure!=null)throw new InvalidOperationException("READ_ONLY_PROBE_THREAD_FAILED",failure);
+  }
+  static List<Dictionary<string,object>> TargetFileAccess(SafeAccessTokenHandle token,string node,string project) {
+    var rows=new List<Dictionary<string,object>>();
+    InIsolatedThread(delegate {Check(ImpersonateLoggedOnUser(token));
+      foreach(string file in new[]{node,project,Path.Combine(project,"scripts","cleaner-owned-desktop-probe.cjs"),Path.Combine(project,"candidate","LaoyuDiskCleaner.exe"),Path.Combine(project,"candidate","resources","app","package.json")}) {
+        var row=new Dictionary<string,object>{{"path",file},{"scope","read-only CreateFile under designated ordinary logon token"}};rows.Add(row);
+        try {bool dir=String.Equals(file,project,StringComparison.OrdinalIgnoreCase);var security=new SecurityAttributes{Length=Marshal.SizeOf(typeof(SecurityAttributes)),Inherit=false};using(var handle=CreateFile(file,dir?0x81u:0xA0000000u,7,ref security,3,dir?0x02000000u:0u,IntPtr.Zero)){int code=Marshal.GetLastWin32Error();row["accessible"]=!handle.IsInvalid;row["requestedMask"]=dir?0x81u:0xA0000000u;if(handle.IsInvalid)row["nativeError"]=code;}}
+        catch(Exception e){row["accessible"]=false;row["error"]=e.Message;}
+      }
+    },delegate{Check(RevertToSelf());});return rows;
+  }
   public static bool MayDeleteAccount(bool created,bool ownedStopped,bool profileLoadAttempted,bool profileLoaded,bool profileDeleted) { return created && ownedStopped && !profileLoaded && (!profileLoadAttempted || profileDeleted); }
   public static string RequestedDesktop() { return @"winsta0\default"; }
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct UserInfo { public string Name, Password; public uint PasswordAge, Priv; public string Home, Comment; public uint Flags; public string Script; }
@@ -127,6 +145,7 @@ public static class CleanerOwnedDesktopRunner {
       stage="ci-owned-interactive-desktop";ownedDesktop=new CleanerOwnedDesktop(sidValue,Guid.NewGuid().ToString("N"));ownedDesktop.Prepare();Diagnostic["ownedDesktop"]=ownedDesktop.Evidence;
       string actualProfile=ProfilePath(token); Diagnostic["profile"]=actualProfile;Diagnostic["sid"]=sidValue;Diagnostic["requestedDesktop"]=ownedDesktop.RequestedDesktop;Diagnostic["desktopBefore"]=DesktopEvidence(token); stage="os-environment-block"; Check(CreateEnvironmentBlock(out nativeEnv,token,false)); testEnv=TestEnvironment(nativeEnv,user,sidValue,actualProfile,ownedDesktop.RequestedDesktop.Substring("winsta0\\LaoyuCleaner_".Length));
       stage="ci-owned-artifact-permission"; grantOutput(sidValue,actualProfile);
+      Diagnostic["prelaunchTargetFiles"]=TargetFileAccess(token,node,project);Diagnostic["prelaunchOwnedDesktopAccess"]=ownedDesktop.Access(token.DangerousGetHandle());
       string output=Path.Combine(project,"verification","core","windows-standard-user-bootstrap.txt"); var security=new SecurityAttributes { Length=Marshal.SizeOf(typeof(SecurityAttributes)),Inherit=true };
       using(var outFile=CreateFile(output,0x40000000,3,ref security,2,0,IntPtr.Zero)) using(var input=CreateFile("NUL",0x80000000,3,ref security,3,0,IntPtr.Zero)) {
         if(outFile.IsInvalid||input.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -143,7 +162,7 @@ public static class CleanerOwnedDesktopRunner {
     finally {
       // Only our suspended child and private job may be terminated. Closing a
       // kill-on-close handle alone does not mean descendants released the profile.
-      bool ownedStopped=true;
+      bool ownedStopped=ReadOnlyProbeThreadEnded;
       if(process.Process!=IntPtr.Zero&&!processExited) { TerminateProcess(process.Process,1); if(WaitForSingleObject(process.Process,10000)!=0) { ownedStopped=false; cleanup.Add("owned-root-stop-timeout"); } }
       if(job!=IntPtr.Zero) {
         try {
