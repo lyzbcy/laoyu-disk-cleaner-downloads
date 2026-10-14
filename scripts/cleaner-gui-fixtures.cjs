@@ -24,4 +24,13 @@ async function cleanupFixtures(set){const state=sets.get(set);if(!state)throw Er
  // Only directories created by this call, still the same object and now empty.
  for(const item of [...state.createdDirectories].reverse()){try{if(JSON.stringify(await directory(item.file))!==JSON.stringify(item.identity))throw Error('FIXTURE_DIRECTORY_CHANGED');await fs.rmdir(item.file);}catch(e){if(!['ENOENT','ENOTEMPTY','EEXIST'].includes(e.code))throw e;}}
 }
-module.exports={fixtureRelativePath,cacheRoot,createFixtures,verifyFixture,changeFixture,cleanupFixtures};
+async function collectOwnedStageFacts(set,entry){
+ const saved=sets.get(set)?.proofs.get(entry);if(!saved)throw Error('FIXTURE_AUTHORITY');const parent=path.dirname(entry.file);await directory(parent);const names=await fs.readdir(parent);if(names.length>64)throw Error('OWNED_STAGE_BOUND');const stages=[];
+ for(const name of names){if(!/^\.laoyu-cleaner-stage-[a-f0-9-]{36}$/.test(name))continue;const folder=path.join(parent,name);await directory(folder);const manifest=path.join(folder,'manifest.json');let handle;
+  try{await inspectPath({home:set.home,root:folder,target:manifest,kind:'file'});handle=await fs.open(manifest,require('node:fs').constants.O_RDONLY|(require('node:fs').constants.O_NOFOLLOW||0));const st=await handle.stat();if(!st.isFile()||st.nlink!==1||st.size>65536)throw Error('OWNED_STAGE_MANIFEST_BOUND');const buffer=Buffer.alloc(65537);const {bytesRead}=await handle.read(buffer,0,buffer.length,0);if(bytesRead>65536)throw Error('OWNED_STAGE_MANIFEST_BOUND');const record=JSON.parse(buffer.subarray(0,bytesRead).toString('utf8'));if(record.source?.path!==entry.file||record.source?.fingerprint!==saved.proof.fingerprint||record.directory!==folder||record.stagedPath!==path.join(folder,'payload'))continue;
+   const fact={phase:record.phase,code:record.code,sourceIdentity:record.source.identity,sourceFingerprint:record.source.fingerprint};try{const current=await inspectPath({home:set.home,root:folder,target:path.join(folder,'payload'),kind:'file'});fact.currentIdentity=current.identity;fact.currentFingerprint=current.fingerprint;fact.differences=Object.keys(record.source.identity).filter(key=>JSON.stringify(record.source.identity[key])!==JSON.stringify(current.identity[key]));}catch(error){fact.inspectionError={code:error.code,message:String(error.message).slice(0,512)};}stages.push(fact);
+  }catch(error){stages.push({inspectionError:{code:error.code,message:String(error.message).slice(0,512)}});}finally{await handle?.close();}
+ }
+ return {scope:'read-only bounded manifests and original inspector for exact in-memory owned fixture sibling stages',stages};
+}
+module.exports={fixtureRelativePath,cacheRoot,createFixtures,verifyFixture,changeFixture,cleanupFixtures,collectOwnedStageFacts};
