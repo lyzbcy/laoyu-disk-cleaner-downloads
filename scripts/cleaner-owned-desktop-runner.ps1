@@ -167,7 +167,7 @@ public static class CleanerOwnedDesktopRunner {
     if(!Path.IsPathRooted(node)||!Path.IsPathRooted(project)||node.Contains("\"")||project.Contains("\"")||!String.Equals(Path.GetFullPath(project),Path.GetFullPath(Environment.GetEnvironmentVariable("GITHUB_WORKSPACE")),StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("INVALID_RUNNER_PATH");
     Diagnostic["parentNamespaceSecurity"]=ParentNamespaceSecurity();Diagnostic["parentProductMutexBefore"]=ProductMutexSecurity("before-new-account");
     string user="cln"+Guid.NewGuid().ToString("N").Substring(0,12), password;
-    CleanerOwnedDesktop ownedDesktop=null;
+    CleanerOwnedDesktop ownedDesktop=null;CleanerOwnedNamespace ownedNamespace=null;
     byte[] random=new byte[24]; using(var rng=RandomNumberGenerator.Create()) rng.GetBytes(random); password=Convert.ToBase64String(random)+"aA1!"; Array.Clear(random,0,random.Length);
     bool created=false,profileLoadAttempted=false,profileDeleted=false,profileLoaded=false,profileEverLoaded=false,processExited=false; string stage="account-create",sidValue=null,logonSid=null; SecurityIdentifier sid=null; SafeAccessTokenHandle token=null; IntPtr nativeEnv=IntPtr.Zero,testEnv=IntPtr.Zero,job=IntPtr.Zero; Profile profile=new Profile(); ProcessInfo process=new ProcessInfo(); int exit=1;
     var cleanup=new List<string>();
@@ -178,7 +178,7 @@ public static class CleanerOwnedDesktopRunner {
       stage="profile-privileges"; Enable("SeBackupPrivilege"); Enable("SeRestorePrivilege");
       stage="standard-user-logon"; Check(LogonUser(user,".",password,2,0,out token));
       stage="os-profile-load"; profile.Size=(uint)Marshal.SizeOf(typeof(Profile)); profile.Flags=1; profile.UserName=user; profileLoadAttempted=true; Check(LoadUserProfile(token,ref profile)); profileLoaded=true; profileEverLoaded=true;
-      stage="ci-owned-interactive-desktop";logonSid=TokenLogonSid(token);Diagnostic["expectedLogonSid"]=logonSid;ownedDesktop=new CleanerOwnedDesktop(sidValue,logonSid,Guid.NewGuid().ToString("N"));ownedDesktop.Prepare();Diagnostic["ownedDesktop"]=ownedDesktop.Evidence;
+      stage="ci-owned-interactive-desktop";logonSid=TokenLogonSid(token);Diagnostic["expectedLogonSid"]=logonSid;stage="ci-owned-session-namespace";ownedNamespace=new CleanerOwnedNamespace(logonSid);Diagnostic["ownedNamespace"]=ownedNamespace.Evidence;ownedNamespace.Prepare();stage="ci-owned-interactive-desktop";ownedDesktop=new CleanerOwnedDesktop(sidValue,logonSid,Guid.NewGuid().ToString("N"));ownedDesktop.Prepare();Diagnostic["ownedDesktop"]=ownedDesktop.Evidence;
       string actualProfile=ProfilePath(token); Diagnostic["profile"]=actualProfile;Diagnostic["sid"]=sidValue;Diagnostic["requestedDesktop"]=ownedDesktop.RequestedDesktop;Diagnostic["desktopBefore"]=DesktopEvidence(token); stage="os-environment-block"; Check(CreateEnvironmentBlock(out nativeEnv,token,false)); testEnv=TestEnvironment(nativeEnv,user,sidValue,actualProfile,ownedDesktop.RequestedDesktop.Substring("winsta0\\LaoyuCleaner_".Length),logonSid);
       stage="ci-owned-artifact-permission"; grantOutput(sidValue,actualProfile);
       Diagnostic["prelaunchTargetFiles"]=TargetFileAccess(token,node,project,fullSuite);Diagnostic["prelaunchOwnedDesktopAccess"]=ownedDesktop.Access(token.DangerousGetHandle());
@@ -191,7 +191,7 @@ public static class CleanerOwnedDesktopRunner {
         stage="create-process-with-existing-primary-token"; Diagnostic["launchApi"]="CreateProcessWithTokenW; existing primary token; logonFlags=0; explicit owned desktop";Diagnostic["existingSeImpersonatePrivilege"]=ExistingImpersonate();Check(CreateProcessWithTokenW(token,0,node,new StringBuilder(command),0x404,testEnv,project,ref startup,out process));Diagnostic["createProcessSucceeded"]=true;Diagnostic["createdChildPid"]=process.Pid;Diagnostic["createdProcessHandleNonzero"]=process.Process!=IntPtr.Zero;Diagnostic["createdThreadHandleNonzero"]=process.Thread!=IntPtr.Zero;Diagnostic["createdChildReadOnly"]=ProcessBoundary(process.Process,process.Pid);Diagnostic["parentReadOnly"]=ProcessBoundary(GetCurrentProcess(),(uint)System.Diagnostics.Process.GetCurrentProcess().Id);
         stage="assign-owned-child-job";Check(AssignProcessToJobObject(job,process.Process));Diagnostic["ownedJobAssigned"]=true;
         stage="open-actual-child-token";SafeAccessTokenHandle actualChild=ReadActualChildToken(token,process.Process);Diagnostic["actualChildTokenOpened"]=true;using(actualChild){stage="verify-actual-child-logon";string actualLogon=TokenLogonSid(actualChild);Diagnostic["actualChildLogonSid"]=actualLogon;if(actualLogon!=logonSid)throw new InvalidOperationException("ACTUAL_CHILD_LOGON_SESSION_MISMATCH");Diagnostic["actualChildAccess"]=DesktopEvidence(actualChild);stage="verify-actual-child-profile";Diagnostic["actualChildProfile"]=ProfilePath(actualChild);}
-        stage="verify-launch-security";ownedDesktop.VerifyStillPrepared();
+        stage="verify-launch-security";ownedNamespace.VerifyStillPrepared();ownedDesktop.VerifyStillPrepared();
         stage="resume-owned-child";if(ResumeThread(process.Thread)==UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error());
         Console.WriteLine("STANDARD_USER_STARTED user="+user+" sid="+sidValue+" nativeProfile="+actualProfile+" accountGroup=Users");
         stage="owned-child-result"; uint wait=WaitForSingleObject(process.Process,fullSuite?900000u:360000u); if(wait!=0) throw new InvalidOperationException("OWNED_TEST_PROCESS_TIMEOUT_OR_WAIT_FAILURE"); processExited=true; uint code; Check(GetExitCodeProcess(process.Process,out code)); Diagnostic["childExitCode"]=code;exit=code==0?0:1;
@@ -215,15 +215,16 @@ public static class CleanerOwnedDesktopRunner {
       if(testEnv!=IntPtr.Zero) Marshal.FreeHGlobal(testEnv); if(nativeEnv!=IntPtr.Zero) DestroyEnvironmentBlock(nativeEnv);
       bool desktopRestored=true;
       Diagnostic["parentProductMutexAfter"]=ProductMutexSecurity("after-owned-job-cleanup-before-desktop-restore");
-      if(ownedDesktop!=null){var desktopErrors=ownedDesktop.Restore(ownedStopped);Diagnostic["ownedDesktop"]=ownedDesktop.Evidence;cleanup.AddRange(desktopErrors);desktopRestored=desktopErrors.Count==0;}
+      bool namespaceRestored=true;if(ownedNamespace!=null){var namespaceErrors=ownedNamespace.Restore(ownedStopped);Diagnostic["ownedNamespace"]=ownedNamespace.Evidence;cleanup.AddRange(namespaceErrors);namespaceRestored=namespaceErrors.Count==0;}
+      if(ownedDesktop!=null){var desktopErrors=ownedDesktop.Restore(ownedStopped);Diagnostic["ownedDesktop"]=ownedDesktop.Evidence;cleanup.AddRange(desktopErrors);desktopRestored=desktopErrors.Count==0&&namespaceRestored;}
       if(profileLoaded&&ownedStopped) { if(UnloadUserProfile(token,profile.Handle)) profileLoaded=false; else cleanup.Add("profile-unload="+Marshal.GetLastWin32Error()); }
-      if(created&&sidValue!=null&&profileEverLoaded&&!profileLoaded&&ownedStopped&&desktopRestored) {
+      if(namespaceRestored&&created&&sidValue!=null&&profileEverLoaded&&!profileLoaded&&ownedStopped&&desktopRestored) {
         int attempts=0; int deletionError=RetryProfileDelete(delegate { attempts++; return DeleteProfile(sidValue,null,null)?0:Marshal.GetLastWin32Error(); },System.Threading.Thread.Sleep,51);
         Console.WriteLine("STANDARD_USER_PROFILE_DELETE_ATTEMPTS="+attempts+" error="+deletionError);
         profileDeleted=deletionError==0;Diagnostic["profileDeleteError"]=deletionError;if(deletionError!=0) cleanup.Add("new-profile-delete="+deletionError);
       }
       if(token!=null) { Diagnostic["desktopAfter"]=DesktopEvidence(token); token.Dispose(); }
-      if(desktopRestored&&MayDeleteAccount(created,ownedStopped,profileLoadAttempted,profileLoaded,profileDeleted)) { uint status=NetUserDel(null,user);Diagnostic["accountDeleteError"]=status; if(status!=0) cleanup.Add("new-account-delete="+status); }
+      if(namespaceRestored&&desktopRestored&&MayDeleteAccount(created,ownedStopped,profileLoadAttempted,profileLoaded,profileDeleted)) { uint status=NetUserDel(null,user);Diagnostic["accountDeleteError"]=status; if(status!=0) cleanup.Add("new-account-delete="+status); }
       else if(created) { Diagnostic["accountRetained"]=true;cleanup.Add("new-account-retained-job-or-profile-cleanup-unconfirmed"); }
       Diagnostic["profileLoadAttempted"]=profileLoadAttempted;Diagnostic["profileDeleted"]=profileDeleted;Diagnostic["profileStillLoaded"]=profileLoaded;
       password=null;

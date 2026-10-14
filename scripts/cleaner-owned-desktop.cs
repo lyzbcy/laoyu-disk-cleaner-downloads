@@ -78,3 +78,34 @@ public sealed class CleanerOwnedDesktop {
   Evidence["cleanupErrors"]=errors;return errors;
  }
 }
+
+// CI-only grant for a new logon SID placed into the runner's existing Terminal Session.
+// Does not change owner, Global namespace, another session, groups, or product files.
+public sealed class CleanerOwnedNamespace {
+ const uint ChildMask=7;
+ readonly string sid;IntPtr directory;byte[] before,ownAce;bool writeAttempted;
+ public readonly Dictionary<string,object> Evidence=new Dictionary<string,object>();
+ [StructLayout(LayoutKind.Sequential)] struct Unicode {public ushort Length,MaximumLength;public IntPtr Buffer;}
+ [StructLayout(LayoutKind.Sequential)] struct Attributes {public uint Length;public IntPtr RootDirectory,ObjectName;public uint Flags;public IntPtr Descriptor,Quality;}
+ [DllImport("ntdll.dll")] static extern int NtOpenDirectoryObject(out IntPtr handle,uint access,ref Attributes attributes);
+ [DllImport("ntdll.dll")] static extern int NtQuerySecurityObject(IntPtr handle,uint info,byte[] descriptor,uint length,out uint needed);
+ [DllImport("ntdll.dll")] static extern int NtSetSecurityObject(IntPtr handle,uint info,byte[] descriptor);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+ static void NtCheck(int status){if(status<0)throw new InvalidOperationException("NAMESPACE_NTSTATUS_0x"+unchecked((uint)status).ToString("X8"));}
+ static byte[] Read(IntPtr handle){var bytes=new byte[65536];uint needed;NtCheck(NtQuerySecurityObject(handle,7,bytes,(uint)bytes.Length,out needed));if(needed<20||needed>bytes.Length)throw new InvalidOperationException("NAMESPACE_SD_BOUND");Array.Resize(ref bytes,(int)needed);return bytes;}
+ static void WriteDacl(IntPtr handle,byte[] descriptor){NtCheck(NtSetSecurityObject(handle,4,descriptor));}
+ public CleanerOwnedNamespace(string logonSid){CleanerOwnedDesktop.RequireLogonSid(new[]{logonSid},new uint[]{0xc0000007});sid=logonSid;Evidence["logonSid"]=sid;Evidence["childMask"]=ChildMask;Evidence["authority"]="Disposable GHA current Terminal Session; exact new enabled logon SID noninherited DIRECTORY_QUERY|DIRECTORY_TRAVERSE|DIRECTORY_CREATE_OBJECT only";}
+ public void Prepare(){
+  if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true"||Environment.GetEnvironmentVariable("CI")!="true")throw new InvalidOperationException("DISPOSABLE_GHA_ONLY");
+  int session=System.Diagnostics.Process.GetCurrentProcess().SessionId;if(session==0)throw new InvalidOperationException("INTERACTIVE_SESSION_REQUIRED");string name="\\Sessions\\"+session+"\\BaseNamedObjects";Evidence["name"]=name;
+  IntPtr text=Marshal.StringToHGlobalUni(name),unicode=IntPtr.Zero;try{var value=new Unicode{Length=(ushort)(name.Length*2),MaximumLength=(ushort)((name.Length+1)*2),Buffer=text};unicode=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(Unicode)));Marshal.StructureToPtr(value,unicode,false);var attributes=new Attributes{Length=(uint)Marshal.SizeOf(typeof(Attributes)),ObjectName=unicode,Flags=0x40};NtCheck(NtOpenDirectoryObject(out directory,0x60000,ref attributes));}finally{if(unicode!=IntPtr.Zero)Marshal.FreeHGlobal(unicode);Marshal.FreeHGlobal(text);}
+  before=Read(directory);Evidence["before"]=Convert.ToBase64String(before);var original=new System.Security.AccessControl.RawSecurityDescriptor(before,0);foreach(System.Security.AccessControl.GenericAce ace in original.DiscretionaryAcl){var known=ace as System.Security.AccessControl.KnownAce;if(known!=null&&known.SecurityIdentifier.Value==sid)throw new InvalidOperationException("NEW_LOGON_SID_ALREADY_PRESENT");}
+  var id=new SecurityIdentifier(sid);var binary=new byte[id.BinaryLength];id.GetBinaryForm(binary,0);ownAce=CleanerOwnedDesktop.Ace(binary,ChildMask);var expected=CleanerOwnedDesktop.Append(before,ownAce);writeAttempted=true;WriteDacl(directory,expected);var actual=Read(directory);if(!CleanerOwnedDesktop.SameExceptAppended(before,actual,ownAce))throw new InvalidOperationException("NAMESPACE_GRANT_READBACK_MISMATCH");Evidence["prepared"]=Convert.ToBase64String(actual);Evidence["preparedExactly"]=true;
+ }
+ public void VerifyStillPrepared(){if(!CleanerOwnedDesktop.SameExceptAppended(before,Read(directory),ownAce))throw new InvalidOperationException("NAMESPACE_CHANGED_BEFORE_RESUME");Evidence["unchangedBeforeResume"]=true;}
+ public List<string> Restore(bool ownedStopped){
+  var errors=new List<string>();if(!ownedStopped)errors.Add("namespace-owned-actors-still-running");
+  if(directory!=IntPtr.Zero){try{if(writeAttempted){var actual=Read(directory);if(!CleanerOwnedDesktop.Equal(before,actual)){bool expected=CleanerOwnedDesktop.SameExceptAppended(before,actual,ownAce);if(!expected)errors.Add("namespace-unrelated-change-preserved");WriteDacl(directory,CleanerOwnedDesktop.Remove(actual,ownAce));}var after=Read(directory);Evidence["after"]=Convert.ToBase64String(after);bool exact=CleanerOwnedDesktop.Equal(before,after);Evidence["restoredExactly"]=exact;if(!exact)errors.Add("namespace-not-byte-identical");}}catch(Exception e){errors.Add("namespace-restore="+e.Message);}finally{if(!CloseHandle(directory))errors.Add("namespace-handle-close="+Marshal.GetLastWin32Error());else Evidence["handleClosed"]=true;directory=IntPtr.Zero;}}
+  Evidence["cleanupErrors"]=errors;return errors;
+ }
+}
