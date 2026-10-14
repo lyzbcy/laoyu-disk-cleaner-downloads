@@ -1,5 +1,6 @@
 ﻿param([Parameter(Mandatory=$true)][int]$TargetPid,[ValidateSet('probe','inspect','cancel','confirm','trash')][string]$Action='probe',[string]$ConfirmName,[string]$FixturePath)
 $ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
 try {
 if($env:GITHUB_ACTIONS -ne 'true'){throw 'ISOLATED_CI_ONLY'}
 if(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'NATIVE_ORDINARY_USER_REQUIRED'}
@@ -42,9 +43,9 @@ if($Action -eq 'trash'){
 }
 $condition=[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty,$TargetPid)
 $windows=[Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children,$condition)
-if($windows.Count -lt 1){throw 'NATIVE_WINDOW_MISSING'}
 $windowDesktops=@();foreach($window in $windows){$windowPid=[uint32]0;$windowTid=[CleanerDesktopIdentity]::GetWindowThreadProcessId([IntPtr]$window.Current.NativeWindowHandle,[ref]$windowPid);if(!$windowTid -or $windowPid -ne $TargetPid){throw 'NATIVE_TARGET_WINDOW_PID_REQUIRED'};$windowDesktop=[CleanerDesktopIdentity]::Name([CleanerDesktopIdentity]::GetThreadDesktop($windowTid));if($windowDesktop -cne $expectedDesktop){throw 'NATIVE_TARGET_SAME_DESKTOP_REQUIRED'};$windowDesktops+=@{tid=$windowTid;desktop=$windowDesktop}}
-if($Action -eq 'probe'){@{controllerDesktop=$controllerDesktop;inputDesktop=$inputDesktop;windowDesktops=$windowDesktops;pid=$TargetPid;platform='win32';accessible=$true;windowCount=$windows.Count;sessionId=$target.SessionId;sid=$owner.Sid}|ConvertTo-Json -Compress;exit 0}
+if($Action -eq 'probe'){$details=@();foreach($window in $windows){$details+=@{title=([string]$window.Current.Name).Substring(0,[Math]::Min(512,([string]$window.Current.Name).Length));className=$window.Current.ClassName;handle=$window.Current.NativeWindowHandle}};@{controllerDesktop=$controllerDesktop;inputDesktop=$inputDesktop;windowDesktops=$windowDesktops;pid=$TargetPid;platform='win32';accessible=($windows.Count -gt 0);windowCount=$windows.Count;sessionId=$target.SessionId;sid=$owner.Sid;actualCommandLine=([string]$instance.CommandLine).Substring(0,[Math]::Min(4096,([string]$instance.CommandLine).Length));actualExecutable=$instance.ExecutablePath;windows=$details}|ConvertTo-Json -Depth 6 -Compress;exit 0}
+if($windows.Count -lt 1){throw 'NATIVE_WINDOW_MISSING'}
 $found=@();foreach($window in $windows){
  $buttons=$window.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Button))
  $cancel=@($buttons|Where-Object {$_.Current.Name -eq '取消'});$confirm=@($buttons|Where-Object {$_.Current.Name -eq $ConfirmName})
