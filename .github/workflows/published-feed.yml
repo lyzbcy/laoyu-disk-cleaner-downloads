@@ -1,6 +1,12 @@
 name: Original published cleaner client checks actual public release feed
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Architecture to observe
+        type: choice
+        options: [both, arm64, x64]
+        default: both
 permissions:
   contents: read
 jobs:
@@ -8,12 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            arch: arm64
-          - runner: macos-15-intel
-            arch: x64
-    runs-on: ${{ matrix.runner }}
+        arch: ${{ fromJSON(inputs.target == 'arm64' && '["arm64"]' || inputs.target == 'x64' && '["x64"]' || '["arm64","x64"]') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
