@@ -1,0 +1,53 @@
+name: Windows candidate ordinary-profile desktop diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ordinary-desktop:
+    permissions:
+      contents: write # GitHub draft assets require this repository push access.
+    runs-on: windows-latest
+    timeout-minutes: 12
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Record diagnostic scope before any download
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force verification | Out-Null
+          @{status='started';scope='new ordinary OS profile and existing Default desktop capability; original client startup only, no cleanup/install/update/release acceptance';release=412494806;source='1d904f540c5d2dd2a131fb2cbafea65a164df292';productionChanged=$false;userProfileOrDesktopAclChanged=$false;checkoutEvidenceGrants='new disposable SID RX and Modify only'} | ConvertTo-Json | Set-Content -Encoding utf8 verification/scope.json
+      - name: Download SHA-pinned draft candidate using this repository token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/candidate-bootstrap.cjs download laoyu-disk-cleaner-2.0.0-win-x64.zip downloads
+      - name: Extract actual original candidate and stage unchanged production modules
+        shell: pwsh
+        run: |
+          Expand-Archive -LiteralPath downloads/laoyu-disk-cleaner-2.0.0-win-x64.zip -DestinationPath candidate -ErrorAction Stop
+          node scripts/candidate-bootstrap.cjs copy candidate/resources/app $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile native declarations and verify all generic harness contracts
+        run: node --test test/*.test.cjs
+      - name: Diagnose a new ordinary OS profile and actual existing Default desktop
+        shell: pwsh
+        run: |
+          $nodePath = (Get-Command node -CommandType Application).Source
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/cleaner-ordinary-user-runner.ps1 -NodeExe $nodePath -ProjectRoot $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve diagnostic evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleaner-public-ordinary-desktop-evidence
+          path: |
+            verification/scope.json
+            verification/production-copy-proof.json
+            verification/core/
+          if-no-files-found: error
