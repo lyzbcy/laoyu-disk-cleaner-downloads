@@ -1,0 +1,30 @@
+name: Same-OS parent native namespace request evidence
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Debug only original parent own fixed nonce mutex child
+        run: node scripts/cleaner-owned-native-debugger.cjs --parent-capability
+      - name: Preserve bounded implementation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleaner-parent-native-capability-evidence
+          path: |
+            verification/core/native-debugger-report.json
+            verification/core/native-debugger-log.txt
+            verification/core/owned-nonce-mutex-probe.cs
+          if-no-files-found: error
