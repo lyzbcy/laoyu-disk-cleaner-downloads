@@ -7,13 +7,14 @@ using System.Text;
 using System.Text.RegularExpressions;
 // Test infrastructure only. Never loaded by the production application.
 public sealed class CleanerOwnedDesktop {
- const uint StationMask=0x20327, DesktopMask=0x201CF;
+ const uint StationMask=0xF037F, DesktopMask=0xF01FF;
  readonly string sid,nonce; IntPtr station,input,desktop; byte[] stationBefore,defaultBefore,stationExpected,desktopExpected,ownAce; bool stationWriteAttempted;
  public readonly Dictionary<string,object> Evidence=new Dictionary<string,object>();
  public string RequestedDesktop { get {return "winsta0\\"+DesktopName(nonce);} }
  public static bool ValidSid(string value) { if(!Regex.IsMatch(value??"",@"^S-1-5-21-\d+-\d+-\d+-\d+$"))return false;uint rid;return UInt32.TryParse(value.Substring(value.LastIndexOf('-')+1),out rid)&&rid>=1000; }
  public static string DesktopName(string nonce) {if(!Regex.IsMatch(nonce??"","^[0-9a-f]{32}$"))throw new InvalidOperationException("OWNED_DESKTOP_NONCE_REQUIRED");return "LaoyuCleaner_"+nonce;}
- public CleanerOwnedDesktop(string userSid,string id) {if(!ValidSid(userSid))throw new InvalidOperationException("NEW_LOCAL_ORDINARY_SID_REQUIRED");DesktopName(id);sid=userSid;nonce=id;}
+ public static string RequireLogonSid(string[] sids,uint[] attributes){if(sids==null||attributes==null||sids.Length!=attributes.Length||sids.Length>4096)throw new InvalidOperationException("TOKEN_GROUP_BOUND");string found=null;for(int i=0;i<sids.Length;i++){if((attributes[i]&0xc0000000)!=0xc0000000)continue;if((attributes[i]&4)==0||(attributes[i]&16)!=0||!Regex.IsMatch(sids[i]??"",@"^S-1-5-5-\d+-\d+$"))throw new InvalidOperationException("ENABLED_LOGON_SID_REQUIRED");var parts=sids[i].Split('-');uint a,b;if(!UInt32.TryParse(parts[4],out a)||!UInt32.TryParse(parts[5],out b)||found!=null)throw new InvalidOperationException("UNIQUE_LOGON_SID_REQUIRED");found=sids[i];}if(found==null)throw new InvalidOperationException("UNIQUE_LOGON_SID_REQUIRED");return found;}
+ public CleanerOwnedDesktop(string userSid,string tokenLogonSid,string id) {if(!ValidSid(userSid))throw new InvalidOperationException("NEW_LOCAL_ORDINARY_SID_REQUIRED");RequireLogonSid(new[]{tokenLogonSid},new uint[]{0xc0000007});DesktopName(id);sid=tokenLogonSid;nonce=id;Evidence["accountSid"]=userSid;Evidence["tokenLogonSid"]=tokenLogonSid;Evidence["authority"]="Microsoft standard interactive client logon-session SID grant; temporary noninherited WinSta0 ACE and owned desktop only";}
  static ushort U16(byte[] b,int p){return (ushort)(b[p]|b[p+1]<<8);} static uint U32(byte[] b,int p){return (uint)(b[p]|b[p+1]<<8|b[p+2]<<16|b[p+3]<<24);} static void W16(byte[] b,int p,int v){b[p]=(byte)v;b[p+1]=(byte)(v>>8);} static void W32(byte[] b,int p,uint v){for(int i=0;i<4;i++)b[p+i]=(byte)(v>>(8*i));}
  public static bool Equal(byte[] a,byte[] b){if(a==null||b==null||a.Length!=b.Length)return false;for(int i=0;i<a.Length;i++)if(a[i]!=b[i])return false;return true;}
  public static byte[] Ace(byte[] sid,uint mask){if(sid==null||sid.Length<12||sid.Length>68||sid[0]!=1||sid.Length!=8+sid[1]*4)throw new InvalidOperationException("SID_BINARY_BOUND");var b=new byte[8+sid.Length];b[0]=0;b[1]=0;W16(b,2,b.Length);W32(b,4,mask);Buffer.BlockCopy(sid,0,b,8,sid.Length);return b;}

@@ -1,4 +1,4 @@
-param([string]$NodeExe, [string]$ProjectRoot)
+param([string]$NodeExe, [string]$ProjectRoot, [switch]$FullSuite)
 # Isolated GitHub Actions only. Account/password exist solely in this process/temporary Windows SAM.
 $ErrorActionPreference = 'Stop'
 $env:PSModulePath = $PSHOME + '\Modules;' + [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
@@ -17,7 +17,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Win32.SafeHandles;
 public static class CleanerOwnedDesktopRunner {
 
-  public static Dictionary<string,object> Diagnostic = new Dictionary<string,object>{{"scope","new ordinary OS account/profile and CI-owned interactive desktop; unique new user station ACE temporarily added, exact restoration required; Default/profile ACLs never changed"}};
+  public static Dictionary<string,object> Diagnostic = new Dictionary<string,object>{{"scope","new ordinary OS account/profile and CI-owned interactive desktop; unique token logon-session station ACE temporarily added, exact restoration required; Default/profile ACLs never changed"}};
   [StructLayout(LayoutKind.Sequential)] struct GenericMapping { public uint Read,Write,Execute,All; }
   [DllImport("user32.dll")] static extern IntPtr GetProcessWindowStation();
   [DllImport("user32.dll")] static extern IntPtr GetThreadDesktop(uint thread);
@@ -46,10 +46,10 @@ public static class CleanerOwnedDesktopRunner {
     var worker=new System.Threading.Thread(delegate(){try{inspect();}catch(Exception e){failure=e;}finally{try{revert();}catch(Exception e){failure=e;}}});
     worker.IsBackground=true;worker.Start();if(!worker.Join(30000))throw new InvalidOperationException("READ_ONLY_PROBE_THREAD_TIMEOUT");ReadOnlyProbeThreadEnded=true;if(failure!=null)throw new InvalidOperationException("READ_ONLY_PROBE_THREAD_FAILED",failure);
   }
-  static List<Dictionary<string,object>> TargetFileAccess(SafeAccessTokenHandle token,string node,string project) {
+  static List<Dictionary<string,object>> TargetFileAccess(SafeAccessTokenHandle token,string node,string project,bool fullSuite) {
     var rows=new List<Dictionary<string,object>>();
     InIsolatedThread(delegate {Check(ImpersonateLoggedOnUser(token));
-      foreach(string file in new[]{node,project,Path.Combine(project,"scripts","cleaner-owned-desktop-probe.cjs"),Path.Combine(project,"candidate","LaoyuDiskCleaner.exe"),Path.Combine(project,"candidate","resources","app","package.json")}) {
+      foreach(string file in new[]{node,project,Path.Combine(project,"scripts",fullSuite?"cleaner-owned-suite.cjs":"cleaner-owned-desktop-probe.cjs"),Path.Combine(project,"candidate","LaoyuDiskCleaner.exe"),Path.Combine(project,"candidate","resources","app","package.json")}) {
         var row=new Dictionary<string,object>{{"path",file},{"scope","read-only CreateFile under designated ordinary logon token"}};rows.Add(row);
         try {bool dir=String.Equals(file,project,StringComparison.OrdinalIgnoreCase);var security=new SecurityAttributes{Length=Marshal.SizeOf(typeof(SecurityAttributes)),Inherit=false};using(var handle=CreateFile(file,dir?0x81u:0xA0000000u,7,ref security,3,dir?0x02000000u:0u,IntPtr.Zero)){int code=Marshal.GetLastWin32Error();row["accessible"]=!handle.IsInvalid;row["requestedMask"]=dir?0x81u:0xA0000000u;if(handle.IsInvalid)row["nativeError"]=code;}}
         catch(Exception e){row["accessible"]=false;row["error"]=e.Message;}
@@ -100,17 +100,19 @@ public static class CleanerOwnedDesktopRunner {
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   static void Check(bool ok) { if(!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
   [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(SafeAccessTokenHandle token,int type,IntPtr info,uint size,out uint needed);
+  [StructLayout(LayoutKind.Sequential)] struct SidAttribute {public IntPtr Sid;public uint Attributes;}
+  static string TokenLogonSid(SafeAccessTokenHandle token){IntPtr bytes=Marshal.AllocHGlobal(65536);try{uint needed;Check(GetTokenInformation(token,2,bytes,65536,out needed));int count=Marshal.ReadInt32(bytes),offset=IntPtr.Size==8?8:4,stride=Marshal.SizeOf(typeof(SidAttribute));if(count<1||count>4096||offset+count*stride>needed)throw new InvalidOperationException("TOKEN_GROUPS_BOUND");var sids=new List<string>();var attributes=new List<uint>();for(int i=0;i<count;i++){var row=(SidAttribute)Marshal.PtrToStructure(IntPtr.Add(bytes,offset+i*stride),typeof(SidAttribute));if((row.Attributes&0xc0000000)==0xc0000000){long pointer=row.Sid.ToInt64(),start=bytes.ToInt64();if(pointer<start||pointer>start+needed-8)throw new InvalidOperationException("TOKEN_LOGON_POINTER_BOUND");int length=8+Marshal.ReadByte(row.Sid,1)*4;if(length>68||pointer+length>start+needed)throw new InvalidOperationException("TOKEN_LOGON_SID_BOUND");sids.Add(new SecurityIdentifier(row.Sid).Value);attributes.Add(row.Attributes);}}return CleanerOwnedDesktop.RequireLogonSid(sids.ToArray(),attributes.ToArray());}finally{Marshal.FreeHGlobal(bytes);}}
   static Dictionary<string,object> ExistingImpersonate(){SafeAccessTokenHandle current;Check(OpenProcessToken(GetCurrentProcess(),8,out current));using(current){Luid id;Check(LookupPrivilegeValue(null,"SeImpersonatePrivilege",out id));IntPtr bytes=Marshal.AllocHGlobal(65536);try{uint needed;Check(GetTokenInformation(current,3,bytes,65536,out needed));int count=Marshal.ReadInt32(bytes);if(count<0||count>4096||4+count*12>needed)throw new InvalidOperationException("TOKEN_PRIVILEGES_BOUND");for(int i=0;i<count;i++){int p=4+i*12;if((uint)Marshal.ReadInt32(bytes,p)==id.Low&&Marshal.ReadInt32(bytes,p+4)==id.High){uint attributes=(uint)Marshal.ReadInt32(bytes,p+8);return new Dictionary<string,object>{{"present",true},{"enabled",(attributes&2)!=0},{"attributes",attributes},{"modified",false}};}}return new Dictionary<string,object>{{"present",false},{"enabled",false},{"modified",false}};}finally{Marshal.FreeHGlobal(bytes);}}}
   static void Enable(string name) {
     SafeAccessTokenHandle token; Check(OpenProcessToken(GetCurrentProcess(),0x28,out token));
     using(token) { var state=new Privileges { Count=1,Attributes=2 }; Check(LookupPrivilegeValue(null,name,out state.Id)); Check(AdjustTokenPrivileges(token,false,ref state,0,IntPtr.Zero,IntPtr.Zero)); int error=Marshal.GetLastWin32Error(); if(error!=0) throw new Win32Exception(error); }
   }
   static string ProfilePath(SafeAccessTokenHandle token) { uint size=0; GetUserProfileDirectory(token,null,ref size); if(size<1||size>32768) throw new InvalidOperationException("PROFILE_PATH_BOUND"); var path=new StringBuilder((int)size); Check(GetUserProfileDirectory(token,path,ref size)); return path.ToString(); }
-  static IntPtr TestEnvironment(IntPtr native,string user,string sid,string profile,string desktopNonce) {
+  static IntPtr TestEnvironment(IntPtr native,string user,string sid,string profile,string desktopNonce,string logonSid) {
     var entries=new List<string>(); int offset=0;
     while(true) { string entry=Marshal.PtrToStringUni(IntPtr.Add(native,offset)); if(entry.Length==0) break; offset+=(entry.Length+1)*2; if(offset>262144) throw new InvalidOperationException("ENVIRONMENT_BOUND"); entries.Add(entry); }
     // Preserve every OS-created USERPROFILE/HOME/TEMP entry unchanged; only append test assertions/context.
-    entries.Add("CLEANER_CI_DESKTOP_NONCE="+desktopNonce); entries.Add("CLEANER_STANDARD_USER_CI=1"); entries.Add("CLEANER_CI_EXPECTED_USERNAME="+user); entries.Add("CLEANER_CI_EXPECTED_SID="+sid); entries.Add("CLEANER_CI_OS_PROFILE="+profile);
+    entries.Add("CLEANER_CI_EXPECTED_LOGON_SID="+logonSid); entries.Add("CLEANER_CI_DESKTOP_NONCE="+desktopNonce); entries.Add("CLEANER_STANDARD_USER_CI=1"); entries.Add("CLEANER_CI_EXPECTED_USERNAME="+user); entries.Add("CLEANER_CI_EXPECTED_SID="+sid); entries.Add("CLEANER_CI_OS_PROFILE="+profile);
 
     entries.Add("GITHUB_ACTIONS=true"); entries.Add("CI=true");
     entries.Add("GITHUB_WORKSPACE="+Environment.GetEnvironmentVariable("GITHUB_WORKSPACE"));
@@ -129,13 +131,14 @@ public static class CleanerOwnedDesktopRunner {
     int error=0; for(int i=0;i<attempts;i++) { error=attempt(); if(error!=32) return error; if(i+1<attempts) sleep(200); }
     return error;
   }
-  public static int Run(string node,string project,Action<string,string> grantOutput) {
+  public static int Run(string node,string project,Action<string,string> grantOutput,bool fullSuite) {
+    Diagnostic["scope"]=fullSuite?"original candidate GUI and isolated owned file actions plus visible installer/default-data reopen in disposable ordinary-user interactive desktop":"ordinary-user CI-owned interactive desktop startup diagnostic only";
     if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true") throw new InvalidOperationException("ISOLATED_GHA_ONLY");
     if(!Path.IsPathRooted(node)||!Path.IsPathRooted(project)||node.Contains("\"")||project.Contains("\"")||!String.Equals(Path.GetFullPath(project),Path.GetFullPath(Environment.GetEnvironmentVariable("GITHUB_WORKSPACE")),StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("INVALID_RUNNER_PATH");
     string user="cln"+Guid.NewGuid().ToString("N").Substring(0,12), password;
     CleanerOwnedDesktop ownedDesktop=null;
     byte[] random=new byte[24]; using(var rng=RandomNumberGenerator.Create()) rng.GetBytes(random); password=Convert.ToBase64String(random)+"aA1!"; Array.Clear(random,0,random.Length);
-    bool created=false,profileLoadAttempted=false,profileDeleted=false,profileLoaded=false,profileEverLoaded=false,processExited=false; string stage="account-create",sidValue=null; SecurityIdentifier sid=null; SafeAccessTokenHandle token=null; IntPtr nativeEnv=IntPtr.Zero,testEnv=IntPtr.Zero,job=IntPtr.Zero; Profile profile=new Profile(); ProcessInfo process=new ProcessInfo(); int exit=1;
+    bool created=false,profileLoadAttempted=false,profileDeleted=false,profileLoaded=false,profileEverLoaded=false,processExited=false; string stage="account-create",sidValue=null,logonSid=null; SecurityIdentifier sid=null; SafeAccessTokenHandle token=null; IntPtr nativeEnv=IntPtr.Zero,testEnv=IntPtr.Zero,job=IntPtr.Zero; Profile profile=new Profile(); ProcessInfo process=new ProcessInfo(); int exit=1;
     var cleanup=new List<string>();
     try {
       var info=new UserInfo { Name=user,Password=password,Priv=1,Flags=0x10201,Comment="Disposable candidate desktop diagnostic user" }; uint parameter; uint status=NetUserAdd(null,1,ref info,out parameter); if(status!=0) throw new Win32Exception((int)status); created=true;
@@ -144,22 +147,22 @@ public static class CleanerOwnedDesktopRunner {
       stage="profile-privileges"; Enable("SeBackupPrivilege"); Enable("SeRestorePrivilege");
       stage="standard-user-logon"; Check(LogonUser(user,".",password,2,0,out token));
       stage="os-profile-load"; profile.Size=(uint)Marshal.SizeOf(typeof(Profile)); profile.Flags=1; profile.UserName=user; profileLoadAttempted=true; Check(LoadUserProfile(token,ref profile)); profileLoaded=true; profileEverLoaded=true;
-      stage="ci-owned-interactive-desktop";ownedDesktop=new CleanerOwnedDesktop(sidValue,Guid.NewGuid().ToString("N"));ownedDesktop.Prepare();Diagnostic["ownedDesktop"]=ownedDesktop.Evidence;
-      string actualProfile=ProfilePath(token); Diagnostic["profile"]=actualProfile;Diagnostic["sid"]=sidValue;Diagnostic["requestedDesktop"]=ownedDesktop.RequestedDesktop;Diagnostic["desktopBefore"]=DesktopEvidence(token); stage="os-environment-block"; Check(CreateEnvironmentBlock(out nativeEnv,token,false)); testEnv=TestEnvironment(nativeEnv,user,sidValue,actualProfile,ownedDesktop.RequestedDesktop.Substring("winsta0\\LaoyuCleaner_".Length));
+      stage="ci-owned-interactive-desktop";logonSid=TokenLogonSid(token);Diagnostic["expectedLogonSid"]=logonSid;ownedDesktop=new CleanerOwnedDesktop(sidValue,logonSid,Guid.NewGuid().ToString("N"));ownedDesktop.Prepare();Diagnostic["ownedDesktop"]=ownedDesktop.Evidence;
+      string actualProfile=ProfilePath(token); Diagnostic["profile"]=actualProfile;Diagnostic["sid"]=sidValue;Diagnostic["requestedDesktop"]=ownedDesktop.RequestedDesktop;Diagnostic["desktopBefore"]=DesktopEvidence(token); stage="os-environment-block"; Check(CreateEnvironmentBlock(out nativeEnv,token,false)); testEnv=TestEnvironment(nativeEnv,user,sidValue,actualProfile,ownedDesktop.RequestedDesktop.Substring("winsta0\\LaoyuCleaner_".Length),logonSid);
       stage="ci-owned-artifact-permission"; grantOutput(sidValue,actualProfile);
-      Diagnostic["prelaunchTargetFiles"]=TargetFileAccess(token,node,project);Diagnostic["prelaunchOwnedDesktopAccess"]=ownedDesktop.Access(token.DangerousGetHandle());
+      Diagnostic["prelaunchTargetFiles"]=TargetFileAccess(token,node,project,fullSuite);Diagnostic["prelaunchOwnedDesktopAccess"]=ownedDesktop.Access(token.DangerousGetHandle());
       string output=Path.Combine(project,"verification","core","windows-standard-user-bootstrap.txt"); var security=new SecurityAttributes { Length=Marshal.SizeOf(typeof(SecurityAttributes)),Inherit=true };
       using(var outFile=CreateFile(output,0x40000000,3,ref security,2,0,IntPtr.Zero)) using(var input=CreateFile("NUL",0x80000000,3,ref security,3,0,IntPtr.Zero)) {
         if(outFile.IsInvalid||input.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
         stage="owned-child-job"; job=CreateJobObject(IntPtr.Zero,null); Check(job!=IntPtr.Zero); var limits=new JobExtended(); limits.Basic.Flags=0x2000; Check(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(JobExtended))));
         var startup=new Startup { Size=(uint)Marshal.SizeOf(typeof(Startup)),Desktop=ownedDesktop.RequestedDesktop,Flags=0x100,Input=input.DangerousGetHandle(),Output=outFile.DangerousGetHandle(),Error=outFile.DangerousGetHandle() };
-        string suite=Path.Combine(project,"scripts","cleaner-owned-desktop-probe.cjs"); string command="\""+node+"\" \""+suite+"\"";
+        string suite=Path.Combine(project,"scripts",fullSuite?"cleaner-owned-suite.cjs":"cleaner-owned-desktop-probe.cjs"); string command="\""+node+"\" \""+suite+"\"";
         stage="create-process-with-existing-primary-token"; Diagnostic["launchApi"]="CreateProcessWithTokenW; existing primary token; logonFlags=0; explicit owned desktop";Diagnostic["existingSeImpersonatePrivilege"]=ExistingImpersonate();Check(CreateProcessWithTokenW(token,0,node,new StringBuilder(command),0x404,testEnv,project,ref startup,out process)); Check(AssignProcessToJobObject(job,process.Process));
-        SafeAccessTokenHandle actualChild;Check(OpenProcessToken(process.Process,0xA,out actualChild));using(actualChild){Diagnostic["actualChildAccess"]=DesktopEvidence(actualChild);Diagnostic["actualChildProfile"]=ProfilePath(actualChild);}
+        SafeAccessTokenHandle actualChild;Check(OpenProcessToken(process.Process,0xA,out actualChild));using(actualChild){string actualLogon=TokenLogonSid(actualChild);Diagnostic["actualChildLogonSid"]=actualLogon;if(actualLogon!=logonSid)throw new InvalidOperationException("ACTUAL_CHILD_LOGON_SESSION_MISMATCH");Diagnostic["actualChildAccess"]=DesktopEvidence(actualChild);Diagnostic["actualChildProfile"]=ProfilePath(actualChild);}
         ownedDesktop.VerifyStillPrepared();
         if(ResumeThread(process.Thread)==UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error());
         Console.WriteLine("STANDARD_USER_STARTED user="+user+" sid="+sidValue+" nativeProfile="+actualProfile+" accountGroup=Users");
-        stage="owned-child-result"; uint wait=WaitForSingleObject(process.Process,360000); if(wait!=0) throw new InvalidOperationException("OWNED_TEST_PROCESS_TIMEOUT_OR_WAIT_FAILURE"); processExited=true; uint code; Check(GetExitCodeProcess(process.Process,out code)); Diagnostic["childExitCode"]=code;exit=code==0?0:1;
+        stage="owned-child-result"; uint wait=WaitForSingleObject(process.Process,fullSuite?900000u:360000u); if(wait!=0) throw new InvalidOperationException("OWNED_TEST_PROCESS_TIMEOUT_OR_WAIT_FAILURE"); processExited=true; uint code; Check(GetExitCodeProcess(process.Process,out code)); Diagnostic["childExitCode"]=code;exit=code==0?0:1;
       }
     } catch(Exception error) { Diagnostic["error"]=new Dictionary<string,object>{{"stage",stage},{"type",error.GetType().Name},{"message",error.Message.Substring(0,Math.Min(error.Message.Length,4096))}};Console.Error.WriteLine("STANDARD_USER_RUNNER_FAILED stage="+stage+" type="+error.GetType().Name+" message="+error.Message); exit=1; }
     finally {
@@ -216,6 +219,6 @@ $grantOutput = [Action[string,string]] {
   [IO.Directory]::SetAccessControl($outputDirectory, $acl)
 
 }
-$code=[CleanerOwnedDesktopRunner]::Run($NodeExe, $ProjectRoot, $grantOutput)
+$code=[CleanerOwnedDesktopRunner]::Run($NodeExe, $ProjectRoot, $grantOutput, [bool]$FullSuite)
 [IO.File]::WriteAllText((Join-Path $outputDirectory 'owned-launcher-report.json'),([CleanerOwnedDesktopRunner]::Diagnostic|ConvertTo-Json -Depth 16),(New-Object Text.UTF8Encoding($false)))
 exit $code
