@@ -1,0 +1,20 @@
+name: Free standard runner availability
+on:
+  push:
+    paths: ['.github/workflows/standard-runner-probe.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  availability:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 2
+    steps:
+      - name: Record standard runner availability without product or account data
+        shell: bash
+        run: |
+          printf 'Public standard runner is available. No product source or credentials were fetched.\n'
