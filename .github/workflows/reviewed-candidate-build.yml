@@ -72,7 +72,8 @@ jobs:
           New-Item -ItemType Directory -Force verification/core | Out-Null
           $env:CLEANER_CI_PARENT_PS_MODULE_PATH = $env:PSModulePath
           $nodePath = (Get-Command node -CommandType Application).Source
-          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/windows-standard-user-runner.ps1 -NodeExe $nodePath -ProjectRoot (Join-Path $env:GITHUB_WORKSPACE 'build-input/source') 2>&1 | Tee-Object -FilePath verification/core/windows-candidate-standard-user-runner.txt
+          $env:GITHUB_WORKSPACE = (Resolve-Path .).Path
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/windows-standard-user-runner.ps1 -NodeExe $nodePath -ProjectRoot $env:GITHUB_WORKSPACE 2>&1 | Tee-Object -FilePath verification/core/windows-candidate-standard-user-runner.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build SHA-verified complete candidate packages without publishing
         id: candidate_build

@@ -1,0 +1,130 @@
+name: Reviewed cleaner Windows rebuild on free public standard runner
+on:
+  workflow_dispatch:
+permissions:
+  contents: write # Only this repository draft input needs authenticated push access.
+concurrency:
+  group: cleaner-candidate-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: win32
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: build-input/source
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: '10.16.1'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Download and verify hidden reviewed source input
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/build-input-bootstrap.py
+      - name: Install fixed dependencies and artwork converter
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install Pillow==11.3.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node -e "if(process.platform!=='${{ matrix.platform }}'||process.arch!=='${{ matrix.arch }}')process.exit(1)"
+      - name: Verify actual generated Windows icon layers
+        env:
+          CLEANER_PYTHON: python
+        run: node --test test/package-assets.acceptance.cjs
+      - name: Verify types and renderer build
+        run: |
+          pnpm typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Mac independent updater/package contracts
+        if: runner.os != 'Windows'
+        run: node --test test/updater.test.cjs test/update-install.test.cjs test/update-service.test.cjs test/settings-update-controller.test.cjs test/package.test.cjs test/http.test.cjs test/update-raw-fs.test.cjs test/installer-script.test.cjs
+      - name: Windows ordinary-user core and updater/package contracts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force verification/core | Out-Null
+          $env:CLEANER_CI_PARENT_PS_MODULE_PATH = $env:PSModulePath
+          $nodePath = (Get-Command node -CommandType Application).Source
+          $env:GITHUB_WORKSPACE = (Resolve-Path .).Path
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File test/windows-standard-user-runner.ps1 -NodeExe $nodePath -ProjectRoot $env:GITHUB_WORKSPACE 2>&1 | Tee-Object -FilePath verification/core/windows-candidate-standard-user-runner.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build SHA-verified complete candidate packages without publishing
+        id: candidate_build
+        env:
+          CLEANER_PYTHON: python
+        run: node scripts/package.cjs ${{ matrix.platform }} ${{ matrix.arch }}
+      - name: Actual Mac source and raw-ASAR runtime regression
+        if: runner.os != 'Windows'
+        shell: pwsh
+        run: |
+          $exe = if ($IsWindows) {'electron.exe'} else {'Electron.app/Contents/MacOS/Electron'}
+          $env:CLEANER_ELECTRON = Join-Path (Join-Path $env:GITHUB_WORKSPACE 'build-input/source') ('.local-tools/electron-${{ matrix.platform }}-${{ matrix.arch }}/'+$exe)
+          node --test test/actual-electron-startup.acceptance.cjs test/update-raw-fs.acceptance.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Actual Mac packaged startup regression
+        id: packaged_startup
+        if: runner.os != 'Windows'
+        shell: pwsh
+        run: |
+          $report = Get-Content verification/packages/${{ matrix.platform }}-${{ matrix.arch }}.json | ConvertFrom-Json
+          $env:CLEANER_PACKAGED_APP = if ($IsWindows) {$report.verifiedDirectory} else {Join-Path $report.verifiedDirectory '捞鱼C盘清理大师.app'}
+          $env:CLEANER_ELECTRON = Join-Path $env:CLEANER_PACKAGED_APP $(if ($IsWindows) {'LaoyuDiskCleaner.exe'} else {'Contents/MacOS/LaoyuDiskCleaner'})
+          node --test test/actual-electron-startup.acceptance.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Actual Mac DMG installation update rollback and preserved data
+        if: runner.os == 'macOS'
+        run: node scripts/cleaner-ci-macos-install.cjs
+      - name: Actual Mac packaged GUI native confirmation and Trash acceptance
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.candidate_build.outcome == 'success' && steps.packaged_startup.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $report = Get-Content verification/packages/${{ matrix.platform }}-${{ matrix.arch }}.json | ConvertFrom-Json
+          $env:CLEANER_PACKAGED_APP = Join-Path $report.verifiedDirectory '捞鱼C盘清理大师.app'
+          node scripts/accept-cleaner.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Record pending ordinary-user Windows GUI acceptance
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          @{status='pending';scope='actual Windows source/packaged GUI and update/rollback acceptance';reason='Requires a dedicated ordinary-user native desktop harness; production owner/DACL gates remain strict';programmaticMacEvidenceIsNotWindows=$true} | ConvertTo-Json | Set-Content -Encoding utf8 verification/packages/windows-actual-startup-pending.json
+      - name: Retain candidate packages and actual runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleaner-candidate-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            build-input/source/verification/restricted-probe/**
+            build-input/source/verification/install-update/**
+            build-input/source/release/*.zip
+            build-input/source/release/*.dmg
+            build-input/source/release/.work-*/laoyu-disk-cleaner-*-setup.exe
+            build-input/source/verification/packages/
+            build-input/source/verification/core/
+            build-input/source/verification/gui/
+            build-input/source/verification/actual-source-startup-green-20261013.json
+            build-input/source/verification/actual-source-startup-20261013.png
+            build-input/source/verification/actual-packaged-startup-green-20261013.json
+            build-input/source/verification/actual-packaged-startup-20261013.png
+          include-hidden-files: true
+          if-no-files-found: error
