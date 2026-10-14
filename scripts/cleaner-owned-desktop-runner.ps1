@@ -254,5 +254,11 @@ $grantOutput = [Action[string,string]] {
 
 }
 $code=[CleanerOwnedDesktopRunner]::Run($NodeExe, $ProjectRoot, $grantOutput, [bool]$FullSuite)
+# Only our fixed controller log is echoed; never traverse product private data for upload.
+$bootstrapLog=[IO.Path]::Combine($outputDirectory,'windows-standard-user-bootstrap.txt')
+try{if([IO.File]::Exists($bootstrapLog)){
+  $stream=[IO.File]::OpenRead($bootstrapLog)
+  try{$skip=[Math]::Max(0,$stream.Length-65536);[void]$stream.Seek($skip,[IO.SeekOrigin]::Begin);$reader=New-Object IO.StreamReader($stream,[Text.Encoding]::UTF8);try{$tail=$reader.ReadToEnd();[Console]::Out.WriteLine('OWNED_CHILD_LOG_BEGIN');[Console]::Out.WriteLine($tail);[Console]::Out.WriteLine('OWNED_CHILD_LOG_END')}finally{$reader.Dispose()}}finally{$stream.Dispose()}
+}}catch{[CleanerOwnedDesktopRunner]::Diagnostic['bootstrapLogReadError']=[string]$_.Exception.Message;[Console]::Error.WriteLine('OWNED_CHILD_LOG_READ_FAILED')}
 [IO.File]::WriteAllText((Join-Path $outputDirectory 'owned-launcher-report.json'),([CleanerOwnedDesktopRunner]::Diagnostic|ConvertTo-Json -Depth 16),(New-Object Text.UTF8Encoding($false)))
 exit $code

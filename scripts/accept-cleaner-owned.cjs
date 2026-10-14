@@ -14,8 +14,8 @@ async function main(){
  const executable=path.join(app,process.platform==='darwin'?'Contents/MacOS/LaoyuDiskCleaner':'LaoyuDiskCleaner.exe'),resources=path.join(app,process.platform==='darwin'?'Contents/Resources/app':'resources/app');
  const pkg=JSON.parse(await fs.readFile(path.join(resources,'package.json'),'utf8'));assert.equal(pkg.name,'laoyu-disk-cleaner');assert.equal(pkg.main,'src/main/index.cjs');
  const base=path.resolve(__dirname,'../verification/core/gui');await fs.mkdir(base,{recursive:true});const evidence=await fs.mkdtemp(path.join(base,process.platform+'-'+process.arch+'-'));
- const data=await require('../src/core/settings.cjs').privateDataDirectory(path.join(evidence,'user-data'),{appPath:app});
- const report={scope:'programmatic packaged GUI and native confirmation/file actions only',status:'running',platform:process.platform,arch:process.arch,version:pkg.version,app,home,evidence,startedAt:new Date().toISOString(),cases:[],nativeDialogs:[],pending:['installation','update/rollback','human first-use and visual review']};
+ const ownedDataRoot=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'cleaner-owned-gui-data-'));const data=await require('../src/core/settings.cjs').privateDataDirectory(path.join(ownedDataRoot,'data'),{appPath:app});
+ const report={scope:'programmatic packaged GUI and native confirmation/file actions only',status:'running',platform:process.platform,arch:process.arch,version:pkg.version,app,home,evidence,ownedDataRoot,startedAt:new Date().toISOString(),cases:[],nativeDialogs:[],pending:['installation','update/rollback','human first-use and visual review']};
  let session,fixtures;const save=()=>fs.writeFile(path.join(evidence,'report.json'),JSON.stringify(report,null,2)+'\n');await save();
  try{
   session=await startSession(executable,data);
