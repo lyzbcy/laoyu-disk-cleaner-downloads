@@ -46,6 +46,18 @@ public static class CleanerOwnedDesktopRunner {
     var worker=new System.Threading.Thread(delegate(){try{inspect();}catch(Exception e){failure=e;}finally{try{revert();}catch(Exception e){failure=e;}}});
     worker.IsBackground=true;worker.Start();if(!worker.Join(30000))throw new InvalidOperationException("READ_ONLY_PROBE_THREAD_TIMEOUT");ReadOnlyProbeThreadEnded=true;if(failure!=null)throw new InvalidOperationException("READ_ONLY_PROBE_THREAD_FAILED",failure);
   }
+  public sealed class TokenHandleHandoff<T>:IDisposable where T:class,IDisposable {
+    readonly object gate=new object();T pending;bool closed;
+    public void Offer(T value){if(value==null)throw new ArgumentNullException("value");lock(gate){if(!closed&&pending==null){pending=value;return;}}value.Dispose();}
+    public T Take(){lock(gate){if(closed||pending==null)throw new InvalidOperationException("TOKEN_HANDLE_NOT_READY");closed=true;T value=pending;pending=null;return value;}}
+    public void Dispose(){T value;lock(gate){closed=true;value=pending;pending=null;}if(value!=null)value.Dispose();}
+  }
+  static SafeAccessTokenHandle ReadActualChildToken(SafeAccessTokenHandle source,IntPtr process){
+    using(var handoff=new TokenHandleHandoff<SafeAccessTokenHandle>()){
+      InIsolatedThread(delegate{Check(ImpersonateLoggedOnUser(source));SafeAccessTokenHandle actual;bool opened=OpenProcessToken(process,0xA,out actual);if(!opened){int error=Marshal.GetLastWin32Error();if(actual!=null)actual.Dispose();throw new Win32Exception(error);}handoff.Offer(actual);},delegate{Check(RevertToSelf());});
+      return handoff.Take();
+    }
+  }
   static List<Dictionary<string,object>> TargetFileAccess(SafeAccessTokenHandle token,string node,string project,bool fullSuite) {
     var rows=new List<Dictionary<string,object>>();
     InIsolatedThread(delegate {Check(ImpersonateLoggedOnUser(token));
@@ -162,13 +174,13 @@ public static class CleanerOwnedDesktopRunner {
         string suite=Path.Combine(project,"scripts",fullSuite?"cleaner-owned-suite.cjs":"cleaner-owned-desktop-probe.cjs"); string command="\""+node+"\" \""+suite+"\"";
         stage="create-process-with-existing-primary-token"; Diagnostic["launchApi"]="CreateProcessWithTokenW; existing primary token; logonFlags=0; explicit owned desktop";Diagnostic["existingSeImpersonatePrivilege"]=ExistingImpersonate();Check(CreateProcessWithTokenW(token,0,node,new StringBuilder(command),0x404,testEnv,project,ref startup,out process));Diagnostic["createProcessSucceeded"]=true;Diagnostic["createdChildPid"]=process.Pid;Diagnostic["createdProcessHandleNonzero"]=process.Process!=IntPtr.Zero;Diagnostic["createdThreadHandleNonzero"]=process.Thread!=IntPtr.Zero;Diagnostic["createdChildReadOnly"]=ProcessBoundary(process.Process,process.Pid);Diagnostic["parentReadOnly"]=ProcessBoundary(GetCurrentProcess(),(uint)System.Diagnostics.Process.GetCurrentProcess().Id);
         stage="assign-owned-child-job";Check(AssignProcessToJobObject(job,process.Process));Diagnostic["ownedJobAssigned"]=true;
-        stage="open-actual-child-token";SafeAccessTokenHandle actualChild;Check(OpenProcessToken(process.Process,0xA,out actualChild));Diagnostic["actualChildTokenOpened"]=true;using(actualChild){stage="verify-actual-child-logon";string actualLogon=TokenLogonSid(actualChild);Diagnostic["actualChildLogonSid"]=actualLogon;if(actualLogon!=logonSid)throw new InvalidOperationException("ACTUAL_CHILD_LOGON_SESSION_MISMATCH");Diagnostic["actualChildAccess"]=DesktopEvidence(actualChild);stage="verify-actual-child-profile";Diagnostic["actualChildProfile"]=ProfilePath(actualChild);}
+        stage="open-actual-child-token";SafeAccessTokenHandle actualChild=ReadActualChildToken(token,process.Process);Diagnostic["actualChildTokenOpened"]=true;using(actualChild){stage="verify-actual-child-logon";string actualLogon=TokenLogonSid(actualChild);Diagnostic["actualChildLogonSid"]=actualLogon;if(actualLogon!=logonSid)throw new InvalidOperationException("ACTUAL_CHILD_LOGON_SESSION_MISMATCH");Diagnostic["actualChildAccess"]=DesktopEvidence(actualChild);stage="verify-actual-child-profile";Diagnostic["actualChildProfile"]=ProfilePath(actualChild);}
         stage="verify-launch-security";ownedDesktop.VerifyStillPrepared();
         stage="resume-owned-child";if(ResumeThread(process.Thread)==UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error());
         Console.WriteLine("STANDARD_USER_STARTED user="+user+" sid="+sidValue+" nativeProfile="+actualProfile+" accountGroup=Users");
         stage="owned-child-result"; uint wait=WaitForSingleObject(process.Process,fullSuite?900000u:360000u); if(wait!=0) throw new InvalidOperationException("OWNED_TEST_PROCESS_TIMEOUT_OR_WAIT_FAILURE"); processExited=true; uint code; Check(GetExitCodeProcess(process.Process,out code)); Diagnostic["childExitCode"]=code;exit=code==0?0:1;
       }
-    } catch(Exception error) { Diagnostic["error"]=new Dictionary<string,object>{{"stage",stage},{"type",error.GetType().Name},{"message",error.Message.Substring(0,Math.Min(error.Message.Length,4096))}};Console.Error.WriteLine("STANDARD_USER_RUNNER_FAILED stage="+stage+" type="+error.GetType().Name+" message="+error.Message); exit=1; }
+    } catch(Exception error) { var cause=error.GetBaseException();var nativeCause=cause as Win32Exception;Diagnostic["error"]=new Dictionary<string,object>{{"stage",stage},{"type",error.GetType().Name},{"message",error.Message.Substring(0,Math.Min(error.Message.Length,4096))},{"rootType",cause.GetType().Name},{"rootMessage",cause.Message.Substring(0,Math.Min(cause.Message.Length,4096))},{"nativeErrorCode",nativeCause==null?(object)null:nativeCause.NativeErrorCode}};Console.Error.WriteLine("STANDARD_USER_RUNNER_FAILED stage="+stage+" type="+error.GetType().Name+" message="+error.Message); exit=1; }
     finally {
       // Only our suspended child and private job may be terminated. Closing a
       // kill-on-close handle alone does not mean descendants released the profile.
