@@ -1,0 +1,31 @@
+name: Read-only native debugger inventory
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inventory:
+    strategy:
+      matrix:
+        runner: [windows-latest, windows-2022]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - name: Read fixed Windows SDK debugger metadata only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $rows=foreach($arch in @('x64','x86')){
+            $path=Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Debuggers\$arch\cdb.exe"
+            if(Test-Path -LiteralPath $path -PathType Leaf){
+              $item=Get-Item -LiteralPath $path
+              $signature=Get-AuthenticodeSignature -LiteralPath $path
+              @{path=$path;exists=$true;size=$item.Length;version=$item.VersionInfo.FileVersion;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant();signatureStatus=[string]$signature.Status;signer=if($signature.SignerCertificate){$signature.SignerCertificate.Subject}else{$null}}
+            }else{@{path=$path;exists=$false}}
+          }
+          @{scope='Read-only fixed SDK cdb metadata; no debugger or product execution, download or installation';runner='${{ matrix.runner }}';imageVersion=$env:ImageVersion;imageOS=$env:ImageOS;paths=@($rows)}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath "$env:RUNNER_TEMP\native-debugger-inventory.json" -Encoding utf8
+      - name: Preserve inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-debugger-inventory-${{ matrix.runner }}
+          path: ${{ runner.temp }}/native-debugger-inventory.json
