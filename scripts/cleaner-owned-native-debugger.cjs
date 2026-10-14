@@ -26,7 +26,7 @@ async function diagnose(executable,out,parentCapability){
   report.initial=await prompt();if(report.initial===null)throw Error('NATIVE_DEBUGGER_INITIAL_BREAK_MISSING');send('bu KERNELBASE!CreateMutexW; bu ntdll!NtOpenDirectoryObject; g');
   for(let count=0;count<128&&!ended&&Date.now()-started<timeoutMs;count++){
    const stop=await prompt();if(stop===null)break;
-   if(/ntdll!NtOpenDirectoryObject/i.test(stop)){
+   if(/ntdll!(?:Nt|Zw)OpenDirectoryObject/i.test(stop)){
     const read=await query(registers+'; k 6; .printf "LAOYU_ACCESS %x\\nLAOYU_ROOT %p\\nLAOYU_NAME %msu\\n", @edx, poi(@r8+8), poi(@r8+0x10)');
     const row={kind:'NtOpenDirectoryObject',entry:read,desiredAccess:marker(read,'LAOYU_ACCESS'),thread:marker(read,'LAOYU_TID'),expectedReturnIp:marker(read,'LAOYU_RETURNIP')};report.events.push(row);
     send('bd *; gu');row.returnStop=await prompt();if(row.returnStop===null)break;row.returnRead=await query(registers+'; !gle');row.returnThread=marker(row.returnRead,'LAOYU_TID');row.threadMatches=row.thread===row.returnThread;row.returnIp=marker(row.returnRead,'LAOYU_RIP');row.returnObserved=!!row.expectedReturnIp&&row.threadMatches&&row.returnIp===row.expectedReturnIp;row.returnValue=row.returnObserved?marker(row.returnRead,'LAOYU_RAX'):null;send('be *; g');
