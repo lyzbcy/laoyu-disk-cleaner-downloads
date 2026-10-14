@@ -1,0 +1,42 @@
+name: Original published cleaner client checks actual public release feed
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-feed:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Download actual formal original anonymously and verify whole bytes
+        env:
+          CLEANER_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir downloads
+          curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output downloads/client.zip "https://github.com/lyzbcy/laoyu-disk-cleaner-downloads/releases/download/v2.0.0/laoyu-disk-cleaner-2.0.0-mac-${CLEANER_ARCH}.zip"
+          node -e 'const fs=require("fs"),crypto=require("crypto"),m=require("./manifests/candidate-2.0.0.json"),a=m.assets.find(x=>x.name===`laoyu-disk-cleaner-2.0.0-mac-${process.env.CLEANER_ARCH}.zip`),b=fs.readFileSync("downloads/client.zip");if(b.length!==a.size||crypto.createHash("sha256").update(b).digest("hex")!==a.sha256)throw Error("FORMAL_BYTES_DIFFER");console.log(a)'
+          ditto -x -k downloads/client.zip candidate
+          codesign --verify --deep --strict 'candidate/捞鱼C盘清理大师.app'
+      - name: Run real client and check production feed without providers or fixtures
+        run: node scripts/cleaner-published-feed.cjs
+      - name: Preserve public feed observation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleaner-published-feed-${{ matrix.arch }}
+          path: verification/public-feed/
+          if-no-files-found: error
