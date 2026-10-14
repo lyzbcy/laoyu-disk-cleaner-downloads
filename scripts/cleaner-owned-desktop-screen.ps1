@@ -1,8 +1,9 @@
-param([Parameter(Mandatory=$true)][string]$OutputFile)
+param([Parameter(Mandatory=$true)][string]$OutputFile,[ValidateSet('inspected','normal')][string]$Phase='inspected')
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:CI -ne 'true' -or $env:CLEANER_STANDARD_USER_CI -ne '1'){throw 'DISPOSABLE_WINDOWS_CI_USER_ONLY'}
-$expected=Join-Path $env:GITHUB_WORKSPACE 'verification/core/ordinary-desktop-screen.png'
+$name=if($Phase -eq 'normal'){'ordinary-normal-desktop-screen.png'}else{'ordinary-desktop-screen.png'}
+$expected=Join-Path (Join-Path $env:GITHUB_WORKSPACE 'verification/core') $name
 if(![String]::Equals([IO.Path]::GetFullPath($OutputFile),[IO.Path]::GetFullPath($expected),[StringComparison]::OrdinalIgnoreCase)){throw 'FIXED_SCREEN_EVIDENCE_PATH_REQUIRED'}
 Add-Type -TypeDefinition @'
 using System;using System.ComponentModel;using System.Text;using System.Runtime.InteropServices;
