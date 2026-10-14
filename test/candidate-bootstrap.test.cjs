@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {verifyManifest,copyProduction}=require('../scripts/candidate-bootstrap.cjs');
 test('fixed asset manifest rejects untrusted or ambiguous identity',()=>{
- const valid={repository:'lyzbcy/laoyu-disk-cleaner-downloads',release:412494806,source:'1d904f540c5d2dd2a131fb2cbafea65a164df292',assets:[{id:1,name:'laoyu-disk-cleaner-2.0.0-win-x64.zip',size:123,sha256:'a'.repeat(64)}]};
+ const valid={repository:'lyzbcy/laoyu-disk-cleaner-downloads',release:412830796,source:'f3fe2af0aacb331566793c678c9b21440cfe51d1',assets:[{id:1,name:'laoyu-disk-cleaner-2.0.0-win-x64.zip',size:123,sha256:'a'.repeat(64)}]};
  assert(verifyManifest(valid));for(const patch of [{repository:'attacker/repo'},{release:-1},{source:'unknown'},{assets:[{...valid.assets[0],name:'../escape.zip'}]},{assets:[valid.assets[0],valid.assets[0]]}])assert.throws(()=>verifyManifest({...valid,...patch}));
 });
 test('production module copy preserves original bytes and refuses an existing destination',async()=>{

@@ -3,7 +3,7 @@
 const fs=require('node:fs/promises'),path=require('node:path'),crypto=require('node:crypto'),https=require('node:https');
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 function verifyManifest(m){
- if(m?.repository!=='lyzbcy/laoyu-disk-cleaner-downloads'||!Number.isSafeInteger(m.release)||m.release<=0||m.source!=='1d904f540c5d2dd2a131fb2cbafea65a164df292'||!Array.isArray(m.assets)||!m.assets.length)throw Error('MANIFEST_IDENTITY');
+ if(m?.repository!=='lyzbcy/laoyu-disk-cleaner-downloads'||!Number.isSafeInteger(m.release)||m.release<=0||m.source!=='f3fe2af0aacb331566793c678c9b21440cfe51d1'||!Array.isArray(m.assets)||!m.assets.length)throw Error('MANIFEST_IDENTITY');
  const names=new Set(),ids=new Set();for(const a of m.assets){if(!Number.isSafeInteger(a.id)||a.id<=0||!Number.isSafeInteger(a.size)||a.size<=0||!/^laoyu-disk-cleaner-2\.0\.0-(?:win-x64(?:-setup\.exe|\.zip)|mac-(?:arm64|x64)\.(?:zip|dmg))$/.test(a.name)||!/^[a-f0-9]{64}$/.test(a.sha256)||names.has(a.name)||ids.has(a.id))throw Error('MANIFEST_ASSET');names.add(a.name);ids.add(a.id);}return true;
 }
 async function copyProduction(source,workspace){
