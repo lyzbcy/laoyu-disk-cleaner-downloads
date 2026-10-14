@@ -6,12 +6,13 @@ const sets=new WeakMap(),roles=['trash','permanent','cancel','changed','recent',
 const sha=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 function cacheRoot(home,platform){if(!['darwin','win32'].includes(platform))throw Error('PLATFORM_UNAVAILABLE');return path.join(home,...(platform==='darwin'?['Library','Caches','pip']:['AppData','Local','pip','Cache']));}
 async function directory(file){const s=await fs.lstat(file);if(!s.isDirectory()||s.isSymbolicLink())throw Error('FIXTURE_DIRECTORY_IDENTITY');if(process.platform==='win32'){const p=await require('../src/platform/windows-native.cjs').getDefaultWindowsBridge().inspect(file);if(!p.ordinary||p.reparse||!p.ownedByCurrentUser)throw Error('FIXTURE_DIRECTORY_OWNER');}else if(s.uid!==process.getuid())throw Error('FIXTURE_DIRECTORY_OWNER');return {dev:String(s.dev),ino:String(s.ino)};}
+function fixtureRelativePath(hash,platform=process.platform){if(typeof hash!=='string'||hash.length!==56||!/^[a-f0-9]{56}$/.test(hash)||!['darwin','win32'].includes(platform))throw Error('OWNED_FIXTURE_NAME_REQUIRED');return (platform==='win32'?path.win32:path.posix).join('http-v2',...hash.slice(0,5),hash.slice(5)+'.body');}
 async function createFixtures({home,platform=process.platform,onCreated=async()=>{}}){
  if(platform!==process.platform)throw Error('PLATFORM_UNAVAILABLE');await validateHome(home);const root=cacheRoot(home,platform),createdDirectories=[],entries=[],proofs=new Map();
  async function ensure(target){let current=home;for(const piece of path.relative(home,target).split(path.sep)){current=path.join(current,piece);let made=false;try{await fs.mkdir(current,{mode:0o700});made=true;}catch(e){if(e.code!=='EEXIST')throw e;}const identity=await directory(current);if(made)createdDirectories.push({file:current,identity});}}
  // Refuse links/foreign ancestors before creating any bytes beneath them.
  await ensure(root);
- for(const role of roles){const hash=crypto.randomBytes(28).toString('hex'),relativePath=path.posix.join('http-v2',...hash.slice(0,5),hash.slice(5)+'.body'),file=path.join(root,...relativePath.split('/'));await ensure(path.dirname(file));
+ for(const role of roles){const hash=crypto.randomBytes(28).toString('hex'),relativePath=fixtureRelativePath(hash,platform),file=path.join(root,...relativePath.split(path.sep));await ensure(path.dirname(file));
   const bytes=crypto.randomBytes(4096);await fs.writeFile(file,bytes,{flag:'wx',mode:0o600});await onCreated({role,relativePath,file,sha256:sha(bytes),bytes:bytes.length});const age=new Date(Date.now()-(role==='recent'?0:8*86400000));await fs.utimes(file,age,age);const proof=await inspectPath({home,root,target:file,kind:'file'}),entry=Object.freeze({role,relativePath,file,sha256:sha(bytes),bytes:bytes.length});entries.push(entry);proofs.set(entry,{proof,sha256:entry.sha256});
  }
  const set=Object.freeze({home,root,platform,entries:Object.freeze(entries)});sets.set(set,{proofs,createdDirectories});return set;
@@ -23,4 +24,4 @@ async function cleanupFixtures(set){const state=sets.get(set);if(!state)throw Er
  // Only directories created by this call, still the same object and now empty.
  for(const item of [...state.createdDirectories].reverse()){try{if(JSON.stringify(await directory(item.file))!==JSON.stringify(item.identity))throw Error('FIXTURE_DIRECTORY_CHANGED');await fs.rmdir(item.file);}catch(e){if(!['ENOENT','ENOTEMPTY','EEXIST'].includes(e.code))throw e;}}
 }
-module.exports={cacheRoot,createFixtures,verifyFixture,changeFixture,cleanupFixtures};
+module.exports={fixtureRelativePath,cacheRoot,createFixtures,verifyFixture,changeFixture,cleanupFixtures};

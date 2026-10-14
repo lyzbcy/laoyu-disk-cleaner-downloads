@@ -29,14 +29,14 @@ async function main(){
   const shot=async name=>{const value=await session.evaluate("process.mainModule.require('electron').BrowserWindow.getAllWindows()[0].webContents.capturePage().then(i=>i.toPNG().toString('base64'))");await fs.writeFile(path.join(evidence,name+'.png'),Buffer.from(value,'base64'));};
   await wait(async()=>{const s=await status();return s.state==='idle'&&s.disks.some(d=>d.source==='statfs')?s:null;},'INITIAL_DISKS_OR_IDLE_TIMEOUT');await shot('initial');
   async function scan(){const before=await status();await click(before.report?'重新扫描':'开始只读扫描');return wait(async()=>{const s=await status();return s.state==='idle'&&s.report&&s.report.id!==before.report?.id?s:null;},'SCAN_TIMEOUT',120000);}
-  let scanned=await scan();report.scan={complete:scanned.report.complete,issues:scanned.report.issues,visited:scanned.report.visited};
+  let scanned=await scan();report.scan={complete:scanned.report.complete,issues:scanned.report.issues,visited:scanned.report.visited,ownedRootEntries:scanned.report.entries.filter(entry=>entry.rootId==='pip-cache').slice(0,100)};
   for(const entry of fixtures.entries){const actual=scanned.report.entries.find(e=>e.rootId==='pip-cache'&&e.relativePath===entry.relativePath);assert.ok(actual,'owned fixture must appear in actual scan');assert.equal(actual.eligible,entry.role!=='recent','actual process/age/policy gates must permit old owned fixtures');await verifyFixture(fixtures,entry);}
   await shot('scan');
   async function selectOne(entry,mode){
    const clear=await session.renderer("Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='清除选择'&&!b.disabled)");if(clear)await click('清除选择');
    await input('select[aria-label="处理方式"]',mode,true);await input('input[aria-label="搜索扫描结果"]',entry.relativePath);
    await wait(()=>session.renderer(`(()=>{const inputs=Array.from(document.querySelectorAll('input[type=checkbox]')).filter(e=>e.getAttribute('aria-label')===${JSON.stringify('选择 '+entry.relativePath)});return inputs.length===1&&!inputs[0].disabled;})()`),'OWNED_ROW_NOT_SELECTABLE');
-   await session.renderer(`document.querySelector(${JSON.stringify('input[aria-label="选择 '+entry.relativePath+'"]')}).click();true`);
+   await session.renderer(`(()=>{const matches=Array.from(document.querySelectorAll('input[type=checkbox]')).filter(e=>e.getAttribute('aria-label')===${JSON.stringify('选择 '+entry.relativePath)});if(matches.length!==1||matches[0].disabled)throw Error('EXACT_OWNED_CHECKBOX_REQUIRED');matches[0].click();return true;})()`);
    await wait(()=>session.renderer("document.querySelectorAll('input[type=checkbox]:checked').length===1"),'EXACT_SELECTION_REQUIRED');await click('预览所选操作');
    await wait(()=>session.renderer("!!document.querySelector('.plan-modal')"),'PLAN_MODAL_REQUIRED');const selected=await session.renderer("Array.from(document.querySelectorAll('.plan-files .file-path')).map(e=>e.textContent)");assert.deepEqual(selected,[entry.relativePath]);await shot(entry.role+'-preview');
   }
