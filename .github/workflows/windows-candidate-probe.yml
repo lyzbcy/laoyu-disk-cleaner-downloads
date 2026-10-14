@@ -5,15 +5,24 @@ permissions:
   contents: read
 jobs:
   restricted-probe:
+    permissions:
+      contents: write # GitHub draft assets require this repository push access.
     runs-on: windows-latest
     timeout-minutes: 12
     env:
       CI: 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24.21.0'
+      - name: Record diagnostic scope before any download
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force verification | Out-Null
+          @{status='started';scope='new same-SID restricted token experiment only; no GUI, installation or release acceptance';release=412494806;source='1d904f540c5d2dd2a131fb2cbafea65a164df292';productionChanged=$false;existingAclChanged=$false} | ConvertTo-Json | Set-Content -Encoding utf8 verification/scope.json
       - name: Verify generic bootstrap contracts
         run: node --test test/candidate-bootstrap.test.cjs
       - name: Download SHA-pinned draft candidate using this repository token
@@ -40,6 +49,7 @@ jobs:
         with:
           name: cleaner-public-restricted-token-evidence
           path: |
+            verification/scope.json
             verification/production-copy-proof.json
             verification/restricted-probe/
           if-no-files-found: error
