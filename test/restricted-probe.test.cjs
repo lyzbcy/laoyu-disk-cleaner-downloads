@@ -62,5 +62,9 @@ test('compiled pure ACL experiment preserves existing ACE bytes and rejects corr
  }
 }`;
  const code=`$ErrorActionPreference='Stop'\nAdd-Type -TypeDefinition @'\n${fs.readFileSync(file,'utf8')}\n${selfTest}\n'@\n[AclPureTest]::Run()`;
- const executable=path.isAbsolute(pwsh)?pwsh:require('node:child_process').execFileSync('/usr/bin/which',[pwsh],{encoding:'utf8'}).trim();await runProcess(executable,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(code,'utf16le').toString('base64')]);
+ const executable=path.isAbsolute(pwsh)?pwsh:require('node:child_process').execFileSync('/usr/bin/which',[pwsh],{encoding:'utf8'}).trim();
+ // Keep the exact complete C# and assertions off Windows' 32767-character command line.
+ const temp=await fs.promises.mkdtemp(path.join(require('node:os').tmpdir(),'cleaner-acl-pure-'));
+ try{const script=path.join(temp,'pure-acl.ps1');await fs.promises.writeFile(script,'\uFEFF'+code,{flag:'wx',mode:0o600});await runProcess(executable,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script]);}
+ finally{await fs.promises.rm(temp,{recursive:true,force:true});}
 });
