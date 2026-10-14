@@ -51,7 +51,7 @@ async function main(){
    const done=await wait(async()=>{const s=await status();return s.state==='idle'&&(role==='cancel'||s.result?.operationId!==before.result?.operationId)?s:null;},'ACTION_SETTLE_TIMEOUT',120000);
    if(role==='cancel'){await verifyFixture(fixtures,entry);assert.equal(done.result?.operationId,before.result?.operationId);report.cases.push({role,action,untouched:true,nativeCanceled:true,returnedToIdle:true,operationUnchanged:true});}
    else{
-    const result=done.result;assert.ok(result);assert.equal(result.outcomes.length,1);
+    const result=done.result;report.lastSettledAction={role,mode,result};await save();assert.ok(result);assert.equal(result.outcomes.length,1);
     if(role==='changed'){assert.equal(result.succeeded,0);assert.equal(result.handledBytes,0);await verifyFixture(fixtures,entry);report.cases.push({role,result,changed});}
     else{
      assert.equal(result.succeeded,1);assert.equal(result.handledBytes,entry.bytes);assert.equal(result.removedBytes,mode==='permanent'?entry.bytes:0);assert.equal(result.movedToTrashBytes,mode==='trash'?entry.bytes:0);await assert.rejects(fs.lstat(entry.file),{code:'ENOENT'});
