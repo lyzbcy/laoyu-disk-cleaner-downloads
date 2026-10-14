@@ -1,8 +1,8 @@
 {
-  "sourceCommit": "f3fe2af0aacb331566793c678c9b21440cfe51d1",
-  "productionSourceCommit": "c737a91e4aa9ebf80e25835103d6d0dd12d0816a",
+  "sourceCommit": "adcdd591d85de419743492a7b449990b399988a3",
+  "macProductionSourcesUnchanged": true,
   "releaseId": 412782750,
-  "assetId": 640639234,
-  "bytes": 5549323,
-  "sha256": "74d6cc63468299035f6e8ea3f8eeafe20c4bb03d84b542544c5e20e1e5b83e71"
+  "assetId": 640720489,
+  "bytes": 5549327,
+  "sha256": "4e7c762df9d8974a50ec46d6df78bb2be68b0b78bbfa39f7beaf44739f428c77"
 }
