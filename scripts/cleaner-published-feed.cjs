@@ -8,8 +8,10 @@ const {startSession,delay}=require('./cleaner-gui-session.cjs');
  const data=path.join(root,'data');await fs.mkdir(data,{mode:0o700});
  const s=await startSession(path.join(app,'Contents/MacOS/LaoyuDiskCleaner'),data);const report={scope:'real original packaged client checks production anonymous GitHub releases/latest, same-version current result; no historical upgrade claim',root,app};
  try{
-  for(let i=0;i<200;i++){try{const v=await s.renderer('window.cleaner.getStatus()');if(v.state==='idle')break;}catch{}await delay(100);}
-  report.identity=await s.evaluate("(()=>{const e=process.mainModule.require('electron'),w=e.BrowserWindow.getAllWindows()[0];return {execPath:process.execPath,version:e.app.getVersion(),packaged:e.app.isPackaged,visible:w.isVisible(),plan:process.env.CLEANER_UPDATE_ACCEPTANCE_PLAN||null,nonce:process.env.CLEANER_UPDATE_ACCEPTANCE_NONCE||null}})()");
+  const identityExpression="(()=>{const e=process.mainModule.require('electron'),w=e.BrowserWindow.getAllWindows()[0];return {execPath:process.execPath,version:e.app.getVersion(),packaged:e.app.isPackaged,visible:w.isVisible(),plan:process.env.CLEANER_UPDATE_ACCEPTANCE_PLAN||null,nonce:process.env.CLEANER_UPDATE_ACCEPTANCE_NONCE||null}})()";
+  let ready=false;report.startupSamples=[];
+  for(let i=0,deadline=Date.now()+60000;Date.now()<deadline;i++){try{const status=await s.renderer('window.cleaner.getStatus()');report.identity=await s.evaluate(identityExpression);if(i%10===0)report.startupSamples.push({state:status.state,visible:report.identity.visible});if(status.state==='idle'&&report.identity.visible===true){ready=true;break;}}catch(e){if(i%10===0)report.startupSamples.push({error:String(e.message).slice(0,200)});}await delay(100);}
+  if(!ready)throw Error('VISIBLE_IDLE_STARTUP_TIMEOUT');
   if(!report.identity.packaged||!report.identity.visible||report.identity.version!=='2.0.0'||report.identity.plan||report.identity.nonce)throw Error('ORIGINAL_PACKAGED_IDENTITY_REQUIRED');
   await s.evaluate("(()=>{globalThis.cleanerFeedObserved=[];process.mainModule.require('electron').session.defaultSession.webRequest.onCompleted({urls:['https://api.github.com/repos/lyzbcy/laoyu-disk-cleaner-downloads/releases/latest']},d=>{globalThis.cleanerFeedObserved.push({url:d.url,method:d.method,statusCode:d.statusCode});});return true})()");
   report.result=await s.renderer('window.cleaner.checkUpdates()');for(let i=0;i<20;i++){report.observed=await s.evaluate('globalThis.cleanerFeedObserved');if(report.observed.length)break;await delay(50);}
